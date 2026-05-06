@@ -1,0 +1,307 @@
+import { defineStore } from 'pinia'
+import { ref, reactive, computed } from 'vue'
+import * as THREE from 'three'
+
+// 声明 cordova 变量，防止 TS 报错
+declare let cordova: any;
+
+export const useRocketStore = defineStore('rocket', () => {
+  // --- 1. 基础状态 ---
+  const isLaunched = ref(false)
+  const isDemoMode = ref(true)
+  const flightTime = ref(0)
+  const isWsConnected = ref(false)
+  
+  const sensorIp = ref(localStorage.getItem('rocket_ws_ip') || '192.168.4.1:81')
+  let ws: WebSocket | null = null
+
+  let serialPort: any = null;
+  let serialReader: any = null;
+
+  // --- 2. 物理数据状态 ---
+  const acc = reactive({ x: 0, y: 0, z: 0 })
+  const gyro = reactive({ x: 0, y: 0, z: 0 })
+  const mag = reactive({ x: 0, y: 0, z: 0 })
+  const quat_raw = reactive({ w: 1, x: 0, y: 0, z: 0 })
+  
+  const altitude = ref(0)
+  const temperature = ref(20)
+  const pressure = ref(101325)
+  const pitch = ref(0)
+  const yaw = ref(0)
+  const roll = ref(0)
+
+  const gForce = ref(1.0)
+  const verticalSpeed = ref(0)
+  const velocity = ref(0)
+  const quaternion = reactive(new THREE.Quaternion())
+
+  let lastHeight = 0
+  let lastUpdateTime = Date.now()
+
+  // --- 3. 归零校准状态 (新增) ---
+  const zeroQuat = reactive(new THREE.Quaternion())
+  const hasCalibrated = ref(false)
+
+  // --- 4. 历史数据状态 ---
+  const historyData = reactive({
+    time: [] as string[],
+    altitude: [] as number[],
+    velocity: [] as number[],
+    temperature: [] as number[],
+    pressure: [] as number[]
+  })
+
+  // --- 5. 计算属性 ---
+  const formattedTime = computed(() => {
+    const s = Math.floor(flightTime.value)
+    return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+  })
+
+  // --- 6. 核心公共函数 ---
+  const pushToHistory = () => {
+    if (!isLaunched.value) return 
+    
+    const timeTag = new Date().toLocaleTimeString().split(' ')[0] || ''
+    historyData.time.push(timeTag)
+    historyData.altitude.push(Number(altitude.value.toFixed(3)))
+    historyData.velocity.push(Number(velocity.value.toFixed(2)))
+    historyData.temperature.push(Number(temperature.value.toFixed(1)))
+    historyData.pressure.push(Number(pressure.value.toFixed(0)))
+
+    if (historyData.time.length > 50) {
+      historyData.time.shift(); historyData.altitude.shift();
+      historyData.velocity.shift(); historyData.temperature.shift();
+      historyData.pressure.shift();
+    }
+  }
+
+  const processDerivedMetrics = () => {
+    const now = Date.now();
+    const dt = (now - lastUpdateTime) / 1000;
+    if (dt > 0) {
+      gForce.value = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2) / 9.8;
+      verticalSpeed.value = (altitude.value - lastHeight) / dt;
+      velocity.value = Math.abs(verticalSpeed.value);
+      
+      if (isLaunched.value) {
+        flightTime.value += dt;
+        pushToHistory();
+      }
+      
+      lastHeight = altitude.value;
+      lastUpdateTime = now;
+    }
+  };
+
+  // --- 7. 归零校准核心函数 (新增) ---
+  const calibrateZero = () => {
+    // 记录当前姿态的逆四元数，作为归零偏移
+    zeroQuat.copy(quaternion).invert()
+    hasCalibrated.value = true
+    console.log("✅ 姿态校准完成：当前位置已设为初始零位")
+  }
+
+  // --- 8. 基础设置函数 ---
+  const setSensorIp = (newIp: string) => {
+    sensorIp.value = newIp
+    localStorage.setItem('rocket_ws_ip', newIp)
+    initWebSocket()
+  }
+
+  const toggleMode = () => {
+    isDemoMode.value = !isDemoMode.value
+  }
+
+  // --- 9. WebSocket 通信逻辑 ---
+  const initWebSocket = () => {
+    if (ws) ws.close()
+    try {
+      const wsUrl = `ws://${sensorIp.value}/`
+      ws = new WebSocket(wsUrl)
+      ws.onopen = () => { isWsConnected.value = true }
+      ws.onmessage = (event) => {
+        if (!isDemoMode.value) {
+          try {
+            const data = JSON.parse(event.data)
+            processRealData(data)
+          } catch (e) { console.error("JSON 解析失败:", e) }
+        }
+      }
+      ws.onerror = () => { isWsConnected.value = false }
+      ws.onclose = () => { isWsConnected.value = false; setTimeout(initWebSocket, 3000) }
+    } catch (error) { console.error("WS初始化失败:", error) }
+  }
+
+  // --- 10. Windows Web Serial 通信逻辑 ---
+  const initWindowsSerial = async () => {
+    if (!('serial' in navigator)) {
+      alert("当前浏览器不支持串口通信，请使用 Chrome 或 Edge 浏览器");
+      return;
+    }
+
+    try {
+      serialPort = await (navigator as any).serial.requestPort();
+      await serialPort.open({ baudRate: 115200 });
+      isWsConnected.value = true;
+      isDemoMode.value = false;
+
+      const decoder = new TextDecoder();
+      serialReader = serialPort.readable.getReader();
+
+      let serialBuffer = "";
+
+      console.log("🟢 Windows 串口连接成功，开始解析 LoRa 流...");
+
+      while (true) {
+        const { value, done } = await serialReader.read();
+        if (done) break;
+
+        serialBuffer += decoder.decode(value, { stream: true });
+
+        if (serialBuffer.includes('\n')) {
+          const lines = serialBuffer.split('\n');
+          serialBuffer = lines.pop() || "";
+
+          lines.forEach(line => {
+            if (line.trim()) {
+              parseCsvData(line.trim());
+            }
+          });
+        }
+      }
+    } catch (error) {
+      console.error("串口操作失败:", error);
+      isWsConnected.value = false;
+    }
+  };
+
+  const stopSerial = async () => {
+    if (serialReader) {
+      await serialReader.cancel();
+      serialReader = null;
+    }
+    if (serialPort) {
+      await serialPort.close();
+      serialPort = null;
+    }
+    isWsConnected.value = false;
+  };
+
+  // --- 11. CSV 数据解析逻辑 (串口用) ---
+  const parseCsvData = (line: string) => {
+    try {
+      const parts = line.split(',').map(v => parseFloat(v.trim()));
+      
+      if (parts.length < 19 || parts.some(isNaN)) {
+        console.warn('CSV数据格式错误，跳过该行:', line);
+        return;
+      }
+
+      acc.x = parts[0] ?? 0; acc.y = parts[1] ?? 0; acc.z = parts[2] ?? 0;
+      gyro.x = parts[3] ?? 0; gyro.y = parts[4] ?? 0; gyro.z = parts[5] ?? 0;
+      mag.x = parts[6] ?? 0; mag.y = parts[7] ?? 0; mag.z = parts[8] ?? 0;
+      
+      quat_raw.w = parts[9] ?? 1;
+      quat_raw.x = parts[10] ?? 0;
+      quat_raw.y = parts[11] ?? 0;
+      quat_raw.z = parts[12] ?? 0;
+      
+      roll.value = parts[13] ?? 0;
+      yaw.value = parts[14] ?? 0;
+      pitch.value = parts[15] ?? 0;
+
+      altitude.value = parts[16] ?? 0;
+      temperature.value = parts[17] ?? 20;
+      pressure.value = parts[18] ?? 101325;
+
+      // 【核心修改】应用归零校准
+      const rawQuat = new THREE.Quaternion(quat_raw.x, quat_raw.y, quat_raw.z, quat_raw.w)
+      quaternion.copy(zeroQuat).multiply(rawQuat)
+
+      processDerivedMetrics(); 
+
+    } catch (e) {
+      console.warn("解析行失败:", line);
+    }
+  };
+
+  // --- 12. JSON 数据处理逻辑 (WebSocket用) ---
+  const processRealData = (data: any) => {
+    acc.x = data.acc_x ?? 0; acc.y = data.acc_y ?? 0; acc.z = data.acc_z ?? 0;
+    gyro.x = data.gyro_x ?? 0; gyro.y = data.gyro_y ?? 0; gyro.z = data.gyro_z ?? 0;
+    quat_raw.w = data.quat_w ?? 1; quat_raw.x = data.quat_x ?? 0; quat_raw.y = data.quat_y ?? 0; quat_raw.z = data.quat_z ?? 0;
+    
+    altitude.value = data.height ?? 0;
+    temperature.value = data.temperature ?? 20;
+    pressure.value = data.pressure ?? 101325;
+
+    const radToDeg = 180 / Math.PI;
+    pitch.value = (data.euler_pitch ?? 0) * radToDeg;
+    yaw.value = (data.euler_yaw ?? 0) * radToDeg;
+    roll.value = (data.euler_roll ?? 0) * radToDeg;
+
+    // 【核心修改】应用归零校准
+    const rawQuat = new THREE.Quaternion(data.quat_x ?? 0, data.quat_y ?? 0, data.quat_z ?? 0, data.quat_w ?? 1)
+    quaternion.copy(zeroQuat).multiply(rawQuat)
+
+    processDerivedMetrics();
+  }
+
+  // --- 13. Demo 模拟模式逻辑 ---
+  let demoTimer: number | null = null
+  const startDemoLoop = () => {
+    demoTimer = window.setInterval(() => {
+      if (isDemoMode.value && isLaunched.value) {
+        const now = Date.now()
+        const dt = (now - lastUpdateTime) / 1000
+        flightTime.value += dt
+        
+        verticalSpeed.value += 9.8 * dt * 0.5 
+        altitude.value += (verticalSpeed.value * dt) / 1000 
+        
+        velocity.value = Math.abs(verticalSpeed.value) 
+        
+        temperature.value = Math.max(-50, 20 - altitude.value * 6.5)
+        pressure.value = Math.max(0, 101325 * Math.pow(1 - altitude.value / 44.3, 5.25))
+        
+        pitch.value = Math.max(0, 90 - altitude.value * 3) 
+        yaw.value = (Math.random() - 0.5) * 0.5 
+        roll.value += 0.1
+        
+        const xRot = (90 - pitch.value) * (Math.PI / 180)
+        const yRot = yaw.value * (Math.PI / 180)
+        const zRot = roll.value * (Math.PI / 180)
+        quaternion.setFromEuler(new THREE.Euler(xRot, yRot, zRot, 'YXZ'))
+        
+        gForce.value = 1.2 + Math.random() * 0.2 + (verticalSpeed.value / 600)
+        
+        pushToHistory()
+
+        lastUpdateTime = now
+      } else if (!isLaunched.value) {
+          lastUpdateTime = Date.now()
+      }
+    }, 100)
+  }
+
+  // --- 14. 发射控制 ---
+  const startLaunch = () => {
+    if (isLaunched.value) return
+    isLaunched.value = true
+    lastUpdateTime = Date.now()
+    lastHeight = altitude.value
+  }
+
+  // --- 暴露给组件的状态和函数 ---
+  return {
+    // 状态
+    isLaunched, isDemoMode, sensorIp, isWsConnected,
+    flightTime, acc, gyro, mag, quat_raw, altitude, temperature, pressure,
+    pitch, yaw, roll, gForce, verticalSpeed, velocity, quaternion, historyData, formattedTime,
+    hasCalibrated, // 新增
+    // 函数
+    setSensorIp, toggleMode, initWebSocket, startDemoLoop, startLaunch,
+    initWindowsSerial, stopSerial, calibrateZero // 新增 calibrateZero
+  }
+})

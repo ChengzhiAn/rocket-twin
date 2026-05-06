@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 第一层：铺满纯黑色作为底色 -->
+    <item android:drawable="@android:color/black" />
+    
+    <!-- 第二层：把你的火箭图片放在正中间，绝对不拉伸 -->
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@drawable/splash_image" /> <!-- 这里对应你刚才重命名的图片名 -->
+    </item>
+</layer-list>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CH340 芯片 (大部分 LoRa 模块用这个) -->
+    <usb-device vendor-id="6790" product-id="29987" /> <!-- 1a86 / 7523 的十进制 -->
+    <!-- CP2102 芯片 -->
+    <usb-device vendor-id="4292" product-id="60000" />
+    <!-- FT232 芯片 -->
+    <usb-device vendor-id="1027" product-id="24577" />
+</resources>
