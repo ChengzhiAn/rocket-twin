@@ -612,16 +612,14 @@ export const useRocketStore = defineStore('rocket', () => {
     }, 7000)
   }
 
-  // --- 视频链路状态 ---
-  type VideoSource = 'ESP32_CAM' | 'HM30_RTSP'
-  const videoSource = ref<VideoSource>(
-    (localStorage.getItem('rocket_video_source') as VideoSource) || 'ESP32_CAM'
-  )
+  // --- 视频链路状态：仅保留经典 ESP32-CAM MJPEG ---
+  type VideoSource = 'ESP32_CAM'
+  const videoSource = ref<VideoSource>('ESP32_CAM')
   const esp32CamHost = ref(localStorage.getItem('rocket_esp32_cam_host') || '192.168.4.1')
 
-  const setVideoSource = (source: VideoSource) => {
-    videoSource.value = source
-    localStorage.setItem('rocket_video_source', source)
+  const setVideoSource = (_source: VideoSource = 'ESP32_CAM') => {
+    videoSource.value = 'ESP32_CAM'
+    localStorage.setItem('rocket_video_source', 'ESP32_CAM')
   }
 
   const setEsp32CamHost = (host: string) => {

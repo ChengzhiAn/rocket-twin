@@ -115,7 +115,7 @@
             <FlightChart />
           </div>
 
-          <!-- 视频链路窗口：ESP32-CAM / HM30 RTSP -->
+          <!-- 视频链路窗口：ESP32-CAM MJPEG -->
           <div class="data-item video-link-container border-t border-cyan-500/20 pt-3">
             <div class="label">VIDEO LINK / 实时画面</div>
             <VideoLink />
@@ -621,7 +621,7 @@ onMounted(() => {
   window.setTimeout(() => alignLaunchControlToCalibrateBottom(), 900)
 
   // 3. 隐藏原生状态栏 (如果装了插件的话)
-  if (window.StatusBar) {
+  if (Capacitor.isPluginAvailable('StatusBar')) {
     StatusBar.hide().catch(()=> {})
   }
 })

@@ -1,224 +1,319 @@
 ﻿<template>
-  <div
-    ref="rootRef"
-    class="video-link rounded-md border border-cyan-500/40 bg-slate-950/90 px-2 py-2 text-[10px] text-cyan-100 shadow-lg backdrop-blur-sm"
-  >
-    <div class="mb-1 flex flex-wrap items-center justify-between gap-1">
-      <span class="font-bold tracking-wide text-cyan-300">VIDEO</span>
-      <div class="flex gap-1">
-        <button
-          type="button"
-          class="rounded px-1.5 py-0.5 font-bold"
-          :class="isEsp32 ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-cyan-500'"
-          @click="rocketStore.setVideoSource('ESP32_CAM')"
-        >
-          ESP32
-        </button>
-        <button
-          type="button"
-          class="rounded px-1.5 py-0.5 font-bold"
-          :class="isHm30 ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-cyan-500'"
-          @click="rocketStore.setVideoSource('HM30_RTSP')"
-        >
-          HM30
+  <section class="video-link" :class="{ 'is-fullscreen': isFullscreen }">
+    <div class="video-kicker">VIDEO LINK / ESP-32</div>
+
+    <header class="video-status-bar" :class="isLinkActive ? 'is-active' : 'is-lost'">
+      <div class="status-left">
+        <span class="status-dot"></span>
+        <span>{{ isLinkActive ? 'LINK ACTIVE' : 'SIGNAL LOST' }}</span>
+      </div>
+      <button type="button" class="fullscreen-btn" @click="toggleFullscreen">
+        {{ isFullscreen ? 'CLOSE' : 'FULL' }}
+      </button>
+    </header>
+
+    <div class="video-frame">
+      <img
+        v-show="isLinkActive"
+        :key="streamKey"
+        class="video-stream"
+        :src="streamUrl"
+        alt="ESP32-CAM MJPEG stream"
+        @load="handleStreamLoad"
+        @error="handleStreamError"
+      />
+
+      <div v-if="!isLinkActive" class="signal-lost-panel">
+        <div class="lost-title">SIGNAL LOST</div>
+        <div class="lost-subtitle">ESP32-CAM signal lost</div>
+        <div class="lost-source">VIDEO SOURCE: ESP32-CAM / MJPEG STREAM</div>
+        <button type="button" class="reconnect-btn" @click="reconnect">
+          RECONNECT VIDEO
         </button>
       </div>
     </div>
 
-    <div v-if="isEsp32" class="space-y-1">
-      <div class="flex items-center gap-1">
-        <label class="text-cyan-600">HOST</label>
-        <input
-          v-model="hostDraft"
-          class="min-w-0 flex-1 rounded border border-cyan-700/50 bg-slate-900 px-1 py-0.5 font-mono text-cyan-100"
-          placeholder="192.168.4.1"
-          @change="applyHost"
-          @keyup.enter="applyHost"
-        />
-      </div>
-      <div class="relative overflow-hidden rounded border border-cyan-800/60 bg-black">
-        <img
-          v-show="streamEnabled"
-          :key="imgKey"
-          :src="imgSrc"
-          alt="MJPEG"
-          class="mx-auto max-h-[min(40vh,280px)] w-full object-contain"
-          crossorigin="anonymous"
-          @error="onImgError"
-          @load="onImgLoad"
-        />
-        <div
-          v-if="!streamOnline && streamEnabled"
-          class="absolute inset-0 flex items-center justify-center bg-black/70 text-[10px] text-amber-300"
-        >
-          SIGNAL LOST
-        </div>
-      </div>
-      <div class="flex justify-between gap-1 text-[9px] text-cyan-600">
-        <span>{{ healthLine }}</span>
-        <button type="button" class="text-cyan-400 underline" @click="reconnect">RECONNECT</button>
-      </div>
-    </div>
-
-    <div v-else class="space-y-1">
-      <div class="flex items-center gap-1">
-        <label class="text-cyan-600">RTSP</label>
-        <input
-          v-model="rtspDraft"
-          class="min-w-0 flex-1 rounded border border-cyan-700/50 bg-slate-900 px-1 py-0.5 font-mono text-[9px] text-cyan-100"
-          @change="persistRtsp"
-        />
-      </div>
-      <div
-        ref="hm30HostRef"
-        class="flex min-h-[120px] items-center justify-center rounded border border-dashed border-cyan-700/50 bg-slate-900/80 p-2 text-center text-[10px] text-cyan-500"
-      >
-        <template v-if="isAndroid">
-          <span>Native RTSP overlay is attached to this area.</span>
-        </template>
-        <template v-else>
-          <span>HM30 RTSP is available in the Android app. Use ESP32 for web preview.</span>
-        </template>
-      </div>
-    </div>
-  </div>
+    <footer class="video-footer">
+      <span class="stream-address">{{ streamUrlDisplay }}</span>
+      <button type="button" class="small-action" @click="reconnect">RECONNECT</button>
+    </footer>
+  </section>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { Capacitor } from '@capacitor/core'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRocketStore } from '../../store/rocket'
-import { NativeVideo } from '../../plugins/nativeVideo'
 
 const rocketStore = useRocketStore()
-const rootRef = ref<HTMLElement | null>(null)
-const hm30HostRef = ref<HTMLElement | null>(null)
 
-const isEsp32 = computed(() => rocketStore.videoSource === 'ESP32_CAM')
-const isHm30 = computed(() => rocketStore.videoSource === 'HM30_RTSP')
-const isAndroid = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android'
-
-const hostDraft = ref(rocketStore.esp32CamHost)
-const imgKey = ref(0)
-const streamEnabled = ref(true)
-const streamOnline = ref(true)
-const healthLine = ref('-')
-
-const RTSP_KEY = 'rocket_hm30_rtsp'
-const rtspDraft = ref(localStorage.getItem(RTSP_KEY) || 'rtsp://192.168.144.25:8554/H264')
-
-const imgSrc = computed(() => {
-  const h = rocketStore.esp32CamHost.replace(/\/$/, '')
-  return `http://${h}:81/stream?cb=${imgKey.value}`
-})
-
-function applyHost() {
-  rocketStore.setEsp32CamHost(hostDraft.value)
-  reconnect()
-}
-
-function persistRtsp() {
-  localStorage.setItem(RTSP_KEY, rtspDraft.value.trim())
-  syncHm30Native()
-}
-
-function reconnect() {
-  streamEnabled.value = true
-  streamOnline.value = true
-  imgKey.value = Date.now()
-}
-
-function onImgError() {
-  streamOnline.value = false
-}
-
-function onImgLoad() {
-  streamOnline.value = true
-}
+const streamKey = ref(Date.now())
+const healthOk = ref(false)
+const imageLoaded = ref(false)
+const isFullscreen = ref(false)
 
 let healthTimer: number | undefined
 
+const normalizedHost = computed(() => {
+  return rocketStore.esp32CamHost
+    .trim()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/:81$/, '')
+    .replace(/:80$/, '')
+})
+
+const streamUrl = computed(() => `http://${normalizedHost.value}:81/stream?cb=${streamKey.value}`)
+const streamUrlDisplay = computed(() => `http://${normalizedHost.value}:81/stream`)
+const healthUrl = computed(() => `http://${normalizedHost.value}/health`)
+
+const isLinkActive = computed(() => healthOk.value && imageLoaded.value)
+
+function reconnect() {
+  imageLoaded.value = false
+  healthOk.value = false
+  streamKey.value = Date.now()
+  void pollHealth()
+}
+
+function handleStreamLoad() {
+  imageLoaded.value = true
+}
+
+function handleStreamError() {
+  imageLoaded.value = false
+}
+
+function toggleFullscreen() {
+  isFullscreen.value = !isFullscreen.value
+}
+
 async function pollHealth() {
-  if (!isEsp32.value) return
-  const h = rocketStore.esp32CamHost.replace(/\/$/, '')
-  const url = `http://${h}/health`
   try {
     const ctrl = new AbortController()
-    const t = window.setTimeout(() => ctrl.abort(), 2500)
-    const res = await fetch(url, { signal: ctrl.signal, cache: 'no-store' })
-    window.clearTimeout(t)
-    if (res.ok) {
-      healthLine.value = 'health OK'
-      streamOnline.value = true
-    } else {
-      healthLine.value = `health ${res.status}`
-    }
+    const timeout = window.setTimeout(() => ctrl.abort(), 2200)
+    const response = await fetch(healthUrl.value, {
+      signal: ctrl.signal,
+      cache: 'no-store',
+    })
+    window.clearTimeout(timeout)
+    healthOk.value = response.ok
   } catch {
-    healthLine.value = 'health -'
+    healthOk.value = false
   }
 }
-
-async function syncHm30Native() {
-  if (!isHm30.value || !isAndroid) {
-    try {
-      await NativeVideo.remove()
-    } catch {
-      // noop
-    }
-    return
-  }
-  await nextTick()
-  const el = hm30HostRef.value
-  if (!el) return
-  const r = el.getBoundingClientRect()
-  const w = window.innerWidth || 1
-  const h = window.innerHeight || 1
-  const bounds = {
-    x: r.left / w,
-    y: r.top / h,
-    width: r.width / w,
-    height: r.height / h,
-  }
-  try {
-    await NativeVideo.embed({ url: rtspDraft.value.trim(), bounds })
-  } catch (e) {
-    console.warn('NativeVideo.embed', e)
-  }
-}
-
-watch(
-  () => rocketStore.videoSource,
-  async (s) => {
-    if (s === 'HM30_RTSP') await syncHm30Native()
-    else {
-      try {
-        await NativeVideo.remove()
-      } catch {
-        // noop
-      }
-    }
-  }
-)
-
-watch(
-  () => rocketStore.esp32CamHost,
-  () => {
-    hostDraft.value = rocketStore.esp32CamHost
-    reconnect()
-  }
-)
 
 onMounted(() => {
-  hostDraft.value = rocketStore.esp32CamHost
+  rocketStore.setVideoSource?.('ESP32_CAM')
   pollHealth()
-  healthTimer = window.setInterval(pollHealth, 4000)
-  syncHm30Native()
-  window.addEventListener('resize', syncHm30Native)
+  healthTimer = window.setInterval(pollHealth, 3000)
 })
 
 onBeforeUnmount(() => {
   if (healthTimer) window.clearInterval(healthTimer)
-  window.removeEventListener('resize', syncHm30Native)
-  NativeVideo.remove().catch(() => {})
 })
 </script>
+
+<style scoped>
+.video-link {
+  --panel-cyan: #22d3ee;
+  --panel-green: #22c55e;
+  --panel-red: #fb7185;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  background:
+    linear-gradient(rgba(8, 47, 73, 0.16) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(8, 47, 73, 0.16) 1px, transparent 1px),
+    rgba(2, 10, 22, 0.92);
+  background-size: 4px 4px, 4px 4px, auto;
+  box-shadow:
+    inset 0 0 24px rgba(34, 211, 238, 0.08),
+    0 0 18px rgba(34, 211, 238, 0.12);
+  color: #cffafe;
+  min-height: 176px;
+}
+
+.video-link::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.04) 0,
+    rgba(255, 255, 255, 0.04) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+  mix-blend-mode: screen;
+}
+
+.video-kicker {
+  position: absolute;
+  top: -14px;
+  left: 0;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: rgba(207, 250, 254, 0.72);
+  text-shadow: 0 0 6px rgba(34, 211, 238, 0.45);
+}
+
+.video-status-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 22px;
+  padding: 0 0 0 8px;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.35);
+  background: linear-gradient(90deg, rgba(8, 47, 73, 0.95), rgba(12, 74, 110, 0.82));
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+}
+
+.status-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.is-active .status-dot {
+  color: var(--panel-green);
+  background: var(--panel-green);
+}
+
+.is-lost .status-dot {
+  color: var(--panel-red);
+  background: var(--panel-red);
+}
+
+.fullscreen-btn {
+  align-self: stretch;
+  min-width: 44px;
+  border-left: 1px solid rgba(34, 211, 238, 0.35);
+  background: rgba(14, 116, 144, 0.38);
+  color: #a5f3fc;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.video-frame {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 132px;
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.video-stream {
+  display: block;
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  image-rendering: auto;
+}
+
+.signal-lost-panel {
+  width: 100%;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  text-align: center;
+  background:
+    radial-gradient(circle at center, rgba(127, 29, 29, 0.18), transparent 58%),
+    rgba(2, 6, 23, 0.82);
+}
+
+.lost-title {
+  color: #fda4af;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.38em;
+  text-indent: 0.38em;
+  text-shadow: 0 0 10px rgba(248, 113, 113, 0.75);
+}
+
+.lost-subtitle {
+  color: rgba(207, 250, 254, 0.56);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+}
+
+.lost-source {
+  color: rgba(34, 211, 238, 0.74);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.reconnect-btn,
+.small-action {
+  border: 1px solid rgba(34, 211, 238, 0.55);
+  background: rgba(8, 145, 178, 0.22);
+  color: #a5f3fc;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  box-shadow: inset 0 0 14px rgba(34, 211, 238, 0.08);
+}
+
+.reconnect-btn {
+  margin-top: 4px;
+  padding: 7px 16px;
+  font-size: 10px;
+}
+
+.video-footer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-top: 1px solid rgba(34, 211, 238, 0.18);
+  font-size: 8px;
+  color: rgba(103, 232, 249, 0.62);
+}
+
+.stream-address {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.small-action {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  font-size: 8px;
+}
+
+.is-fullscreen {
+  position: fixed;
+  inset: 5vh 5vw;
+  z-index: 80;
+}
+
+.is-fullscreen .video-frame {
+  min-height: calc(90vh - 70px);
+}
+
+.is-fullscreen .video-stream {
+  height: calc(90vh - 70px);
+  object-fit: contain;
+}
+</style>
