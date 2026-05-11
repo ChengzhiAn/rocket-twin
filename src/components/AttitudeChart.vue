@@ -47,10 +47,10 @@ const chartOption = computed(() => {
         { name: '偏航角', max: 5, min: -5 },
         { name: '滚转角', max: 5, min: -5 }
       ],
-      center: ['50%', '55%'],
-      radius: '65%',
-      // 科技感样式设置
-      axisName: { color: '#00ffff', fontSize: 12 },
+      center: ['50%', '60%'],
+      radius: '62%',
+      // 科技感样式设置；略下移中心 + 轴名外移，避免与上方三列数值重叠
+      axisName: { color: '#00ffff', fontSize: 11, distance: 10 },
       splitNumber: 4,
       splitArea: { show: false }, // 去掉默认的灰色背景
       axisLine: { lineStyle: { color: 'rgba(0, 255, 255, 0.3)' } },
@@ -98,7 +98,7 @@ const chartOption = computed(() => {
 .data-board {
   display: flex;
   justify-content: space-around;
-  margin-bottom: 4px;
+  margin-bottom: clamp(6px, 1vh, 14px);
   flex-shrink: 0;
 }
 

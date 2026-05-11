@@ -236,8 +236,6 @@
           </div>
 
           <div class="data-item source-control-panel mt-auto pt-6 border-t border-cyan-500/30">
-            <div class="label text-right mb-2">DATA SOURCE LINK</div>
-            
             <!-- 1. 原有的模式切换按钮 -->
             <button 
               class="mode-toggle-btn w-full mb-3"
@@ -1023,7 +1021,17 @@ const handleConnectSerial = async () => {
   flex: 0 0 auto;
 }
 
-.chart-container-r { height: clamp(170px, 32vh, 260px); }
+/* 姿态三角雷达：略增高，避免轴标签与上方数值区挤压 */
+.chart-container-r {
+  height: clamp(200px, 38vh, 300px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chart-container-r :deep(.chart-container) {
+  flex: 1;
+  min-height: 0;
+}
 
 .relative-position-panel {
   flex: 1 1 auto;
@@ -1293,10 +1301,6 @@ const handleConnectSerial = async () => {
 
 .source-control-panel {
   padding-top: clamp(8px, 1.4vh, 16px) !important;
-}
-
-.source-control-panel .label {
-  margin-bottom: 0.35vh !important;
 }
 
 .source-control-panel .mode-toggle-btn {

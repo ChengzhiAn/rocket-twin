@@ -14,7 +14,7 @@
     <div class="rel-pos-text-col">
       <div class="rel-pos-head">
         <span class="rel-pos-title">REL POS / 相对位置</span>
-        <span class="rel-pos-sub">北斗/GPS · 东北向投影 · 盘面北向上</span>
+        <span class="rel-pos-sub">东北向投影 · 盘面北向上</span>
       </div>
 
       <div class="rel-pos-footer">
