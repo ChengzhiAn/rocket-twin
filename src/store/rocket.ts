@@ -84,7 +84,8 @@ type ParsedFlightSample = {
 }
 
 function accMagnitudeG(ax: number, ay: number, az: number): number {
-  return Math.sqrt(ax * ax + ay * ay + az * az) / 9.8
+  const mag = Math.sqrt(ax * ax + ay * ay + az * az)
+  return mag < 4 ? mag : mag / 9.80665
 }
 
 function parseFlightSampleRows(rows: readonly FlightSampleRow[]): ParsedFlightSample[] {
@@ -278,6 +279,40 @@ function briefingToCsvLines(b: FlightSyncBriefing): string[] {
     ',',
     L('原始飞行数据', '以下为逐采样遥测行'),
   ]
+}
+
+/** JSON 遥测中可选数字字段解析（兼容 number 与数字字符串） */
+function pickFiniteTelemetryNumber(source: Record<string, unknown>, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = source[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = parseFloat(v)
+      if (Number.isFinite(n)) return n
+    }
+  }
+  return null
+}
+
+/**
+ * 与 `.doc/ESP32传感器数据` 中 calculateQuaternion 的 roll/pitch/yaw(°) → 四元数公式一致。
+ * Pad 端优先用该公式重建姿态，规避 ESP 端历史上只对 qw/qx 取反造成的错误四元数。
+ */
+function witStyleRpyDegToQuaternion(rollDeg: number, pitchDeg: number, yawDeg: number): THREE.Quaternion {
+  const r = (rollDeg * Math.PI) / 180
+  const p = (pitchDeg * Math.PI) / 180
+  const y = (yawDeg * Math.PI) / 180
+  const cy = Math.cos(y * 0.5)
+  const sy = Math.sin(y * 0.5)
+  const cp = Math.cos(p * 0.5)
+  const sp = Math.sin(p * 0.5)
+  const cr = Math.cos(r * 0.5)
+  const sr = Math.sin(r * 0.5)
+  const w = cy * cp * cr + sy * sp * sr
+  const x = cy * cp * sr - sy * sp * cr
+  const yq = sy * cp * sr + cy * sp * cr
+  const z = sy * cp * cr - cy * sp * sr
+  return new THREE.Quaternion(x, yq, z, w)
 }
 
 /** 模拟用：参考典型小型固体「公里级」探空/科创火箭剖面，量纲与阶段与实飞一致 */
@@ -797,6 +832,54 @@ export const useRocketStore = defineStore('rocket', () => {
   const velocity = ref(0)
   const quaternion = reactive(new THREE.Quaternion())
 
+  /**
+   * 传感器坐标系 → 火箭模型坐标系 的固定旋转。
+   *
+   * 当前确认：火箭模型弹头方向为局部 +Y；Wit 模块按 +X 指向真实弹头安装。
+   * 这里把模型 +Y 映射到传感器 +X，否则俯仰/偏航会耦合甚至镜像反向。
+   */
+  const modelToSensorFrame = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 0, 1),
+    -Math.PI / 2,
+  )
+
+  /** 地面“看起来稳定”：静止时锁定姿态，避免磁航向慢漂带动模型自旋。 */
+  let lastMotionTs = Date.now()
+  const frozenQuat = new THREE.Quaternion()
+  let hasFrozenQuat = false
+
+  function maybeApplyStableQuaternion(qCandidate: THREE.Quaternion) {
+    // 飞行中绝不锁定；只在地面展示时做抗漂移观感优化。
+    if (isLaunched.value) {
+      quaternion.copy(qCandidate)
+      hasFrozenQuat = false
+      return
+    }
+
+    const gyroMag = Math.sqrt(gyro.x * gyro.x + gyro.y * gyro.y + gyro.z * gyro.z) // deg/s
+    const gMag = accMagnitudeG(acc.x, acc.y, acc.z)
+    const isStill = gyroMag < 1.2 && Math.abs(gMag - 1) < 0.10
+
+    if (!isStill) {
+      lastMotionTs = Date.now()
+      quaternion.copy(qCandidate)
+      frozenQuat.copy(qCandidate)
+      hasFrozenQuat = true
+      return
+    }
+
+    // 静止持续一小段时间后开始锁定，避免用户刚停手的瞬态被卡住。
+    const idleMs = Date.now() - lastMotionTs
+    if (idleMs < 800 || !hasFrozenQuat) {
+      quaternion.copy(qCandidate)
+      frozenQuat.copy(qCandidate)
+      hasFrozenQuat = true
+      return
+    }
+
+    quaternion.copy(frozenQuat)
+  }
+
   let lastHeight = 0
   let lastUpdateTime = Date.now()
 
@@ -846,7 +929,7 @@ export const useRocketStore = defineStore('rocket', () => {
     const now = Date.now();
     const dt = (now - lastUpdateTime) / 1000;
     if (dt > 0) {
-      gForce.value = Math.sqrt(acc.x**2 + acc.y**2 + acc.z**2) / 9.8;
+      gForce.value = accMagnitudeG(acc.x, acc.y, acc.z)
       verticalSpeed.value = (heightAboveGround.value - lastHeight) / dt;
       velocity.value = Math.abs(verticalSpeed.value);
       
@@ -879,10 +962,101 @@ export const useRocketStore = defineStore('rocket', () => {
     }
   };
 
+  /**
+   * LoRa 紧凑 JSON：
+   * ax,ay,az,gx,gy,gz,mx,my,mz,qw,qx,qy,qz,roll,yaw,pitch(°),h(MSL m),t(℃),p(Pa)
+   * 与历史 19 列 CSV 语义一致；未识别时返回 false。
+   */
+  const applyCompactLoRaTelemetry = (o: Record<string, unknown>): boolean => {
+    const ax = pickFiniteTelemetryNumber(o, ['ax'])
+    const ay = pickFiniteTelemetryNumber(o, ['ay'])
+    const az = pickFiniteTelemetryNumber(o, ['az'])
+    if (ax === null || ay === null || az === null) return false
+
+    const rollDeg = pickFiniteTelemetryNumber(o, ['roll'])
+    const pitchDeg = pickFiniteTelemetryNumber(o, ['pitch'])
+    const yawDeg = pickFiniteTelemetryNumber(o, ['yaw'])
+    const hasEuler = rollDeg !== null && pitchDeg !== null && yawDeg !== null
+
+    const qwIn = pickFiniteTelemetryNumber(o, ['qw'])
+    const qxIn = pickFiniteTelemetryNumber(o, ['qx'])
+    const qyIn = pickFiniteTelemetryNumber(o, ['qy'])
+    const qzIn = pickFiniteTelemetryNumber(o, ['qz'])
+    const hasQuat = qwIn !== null && qxIn !== null && qyIn !== null && qzIn !== null
+    if (!hasEuler && !hasQuat) return false
+
+    acc.x = ax
+    acc.y = ay
+    acc.z = az
+
+    gyro.x = pickFiniteTelemetryNumber(o, ['gx']) ?? 0
+    gyro.y = pickFiniteTelemetryNumber(o, ['gy']) ?? 0
+    gyro.z = pickFiniteTelemetryNumber(o, ['gz']) ?? 0
+
+    mag.x = pickFiniteTelemetryNumber(o, ['mx']) ?? 0
+    mag.y = pickFiniteTelemetryNumber(o, ['my']) ?? 0
+    mag.z = pickFiniteTelemetryNumber(o, ['mz']) ?? 0
+
+    if (rollDeg !== null) roll.value = rollDeg
+    if (pitchDeg !== null) pitch.value = pitchDeg
+    if (yawDeg !== null) yaw.value = yawDeg
+
+    const rawQuat = hasEuler
+      ? witStyleRpyDegToQuaternion(rollDeg!, pitchDeg!, yawDeg!)
+      : new THREE.Quaternion(qxIn!, qyIn!, qzIn!, qwIn!)
+
+    quat_raw.w = rawQuat.w
+    quat_raw.x = rawQuat.x
+    quat_raw.y = rawQuat.y
+    quat_raw.z = rawQuat.z
+
+    const h = pickFiniteTelemetryNumber(o, ['h', 'altitude_msl', 'altitude', 'height'])
+    if (h !== null) setAltitudeMslFromSensor(h)
+
+    const temp = pickFiniteTelemetryNumber(o, ['t', 'temperature'])
+    if (temp !== null) temperature.value = temp
+
+    const press = pickFiniteTelemetryNumber(o, ['p', 'pressure'])
+    if (press !== null) pressure.value = press
+
+    const rawQuatModel = rawQuat.clone().multiply(modelToSensorFrame)
+    if (rawQuatModel.w < 0) {
+      rawQuatModel.w *= -1
+      rawQuatModel.x *= -1
+      rawQuatModel.y *= -1
+      rawQuatModel.z *= -1
+    }
+    const qCandidate = zeroQuat.clone().multiply(rawQuatModel)
+    maybeApplyStableQuaternion(qCandidate)
+
+    if (!isDemoMode.value) {
+      const plat = pickFiniteTelemetryNumber(o, ['pad_lat', 'padLat', 'pad_latitude'])
+      const plon = pickFiniteTelemetryNumber(o, ['pad_lon', 'padLon', 'pad_longitude'])
+      const rlat = pickFiniteTelemetryNumber(o, ['rocket_lat', 'rocketLat', 'rocket_latitude', 'gps_lat'])
+      const rlon = pickFiniteTelemetryNumber(o, ['rocket_lon', 'rocketLon', 'rocket_longitude', 'gps_lon'])
+      if (plat !== null && plon !== null) {
+        padLatitude.value = plat
+        padLongitude.value = plon
+      }
+      if (rlat !== null && rlon !== null) {
+        rocketLatitude.value = rlat
+        rocketLongitude.value = rlon
+        rocketGpsValid.value = true
+      } else {
+        rocketGpsValid.value = false
+      }
+    }
+
+    processDerivedMetrics()
+    return true
+  }
+
   // --- 7. 归零校准核心函数 (新增) ---
   const calibrateZero = () => {
     // 记录当前姿态的逆四元数，作为归零偏移
     zeroQuat.copy(quaternion).invert()
+    hasFrozenQuat = false
+    lastMotionTs = Date.now()
     hasCalibrated.value = true
     console.log("✅ 姿态校准完成：当前位置已设为初始零位")
   }
@@ -1133,10 +1307,32 @@ export const useRocketStore = defineStore('rocket', () => {
     }
   };
 
-  // --- 11. CSV 数据解析逻辑 (串口用) ---
+  // --- 11. CSV / JSON 数据解析逻辑 (串口用) ---
   // 扩展列（0-based 索引 19-22）：pad_lat, pad_lon, rocket_lat, rocket_lon，单位 ° WGS84；须 length >= 23
   const parseCsvData = (line: string) => {
     try {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('{')) {
+        try {
+          const o = JSON.parse(trimmed) as Record<string, unknown>
+          if (applyCompactLoRaTelemetry(o)) {
+            if (isAndroidSerialHost()) {
+              androidSerialSawValidLine = true
+              bumpAndroidSerialRx()
+            }
+            if (telemetryViaWindowsSerial) {
+              windowsSerialSawValidLine = true
+              bumpWindowsSerialRx()
+            }
+            return
+          }
+          console.warn('JSON 行缺少紧凑遥测姿态字段（需 ax..az 且 roll/pitch/yaw 或 qw..qz），跳过:', trimmed.slice(0, 120))
+        } catch {
+          console.warn('JSON 解析失败，跳过该行:', trimmed.slice(0, 120))
+        }
+        return
+      }
+
       const parts = line.split(',').map(v => parseFloat(v.trim()));
       const core = parts.slice(0, 19)
 
@@ -1183,15 +1379,17 @@ export const useRocketStore = defineStore('rocket', () => {
         rocketGpsValid.value = false
       }
 
-      // 【核心修改】应用归零校准（统一四元数符号，防止双覆盖导致方向反转）
-      const rawQuat = new THREE.Quaternion(quat_raw.x, quat_raw.y, quat_raw.z, quat_raw.w)
-      if (rawQuat.w < 0) {
-        rawQuat.w *= -1
-        rawQuat.x *= -1
-        rawQuat.y *= -1
-        rawQuat.z *= -1
+      // 【核心修改】应用坐标系映射 + 归零校准（统一四元数符号，防止双覆盖导致方向反转）
+      const rawQuatSensor = new THREE.Quaternion(quat_raw.x, quat_raw.y, quat_raw.z, quat_raw.w)
+      const rawQuatModel = rawQuatSensor.multiply(modelToSensorFrame)
+      if (rawQuatModel.w < 0) {
+        rawQuatModel.w *= -1
+        rawQuatModel.x *= -1
+        rawQuatModel.y *= -1
+        rawQuatModel.z *= -1
       }
-      quaternion.copy(zeroQuat).multiply(rawQuat)
+      const qCandidate = zeroQuat.clone().multiply(rawQuatModel)
+      maybeApplyStableQuaternion(qCandidate)
 
       processDerivedMetrics();
 
@@ -1425,6 +1623,9 @@ export const useRocketStore = defineStore('rocket', () => {
 
     quaternion.set(0, 0, 0, 1)
     zeroQuat.set(0, 0, 0, 1)
+    frozenQuat.set(0, 0, 0, 1)
+    hasFrozenQuat = false
+    lastMotionTs = Date.now()
 
     historyData.time = []
     historyData.altitude = []
