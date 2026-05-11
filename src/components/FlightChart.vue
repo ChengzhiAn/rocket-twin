@@ -7,8 +7,8 @@
         <span class="value text-cyan-400">{{ (rocketStore.velocity || 0).toFixed(0) }}</span>
       </div>
       <div class="data-item">
-        <span class="label">当前高度 (km)</span>
-        <span class="value text-blue-400">{{ rocketStore.altitude.toFixed(2) }}</span>
+        <span class="label">离地高度 AGL (m)</span>
+        <span class="value text-blue-400">{{ rocketStore.heightAboveGround.toFixed(1) }}</span>
       </div>
     </div>
     
@@ -25,11 +25,11 @@ import { useRocketStore } from '../store/rocket'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { GridComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 
 // 注册必须的 ECharts 组件
-use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent])
+use([CanvasRenderer, LineChart, GridComponent, TooltipComponent])
 
 const rocketStore = useRocketStore()
 
@@ -41,17 +41,8 @@ const chartOption = computed(() => {
 
   return {
     tooltip: { trigger: 'axis' },
-    legend: {
-      itemWidth: 10,  // 缩小图例图标
-      itemHeight: 6,
-      textStyle: { 
-        color: '#fff',
-        fontSize: 10   // 缩小图例字号
-      },
-      top: '0%'       // 图例置顶，不占用下方空间
-    },
     grid: { 
-      left: '5%', right: '6%', bottom: '16%', top: '30%', 
+      left: '9%', right: '15%', bottom: '11%', top: '8%', 
       containLabel: true // 防裁剪
     },
     xAxis: {
@@ -65,10 +56,11 @@ const chartOption = computed(() => {
     yAxis: [
       {
         type: 'value',
-        name: '速度',
+        name: '速度 m/s',
         min: 0,
         max: hasHistory ? undefined : 100,
         splitNumber: 4,
+        nameGap: 32,
         nameTextStyle: { color: '#00ffff' },
         axisLabel: { color: '#00ffff', fontSize: 9 },
         axisTick: { show: true, lineStyle: { color: 'rgba(0, 255, 255, 0.35)' } },
@@ -77,12 +69,13 @@ const chartOption = computed(() => {
       },
       {
         type: 'value',
-        name: '高度',
+        name: '高度 m',
         min: 0,
-        max: hasHistory ? undefined : 1,
+        max: hasHistory ? undefined : 1200,
         splitNumber: 4,
+        nameGap: 38,
         nameTextStyle: { color: '#3b82f6' },
-        axisLabel: { color: '#3b82f6', fontSize: 9 },
+        axisLabel: { color: '#3b82f6', fontSize: 9, margin: 10 },
         axisTick: { show: true, lineStyle: { color: 'rgba(59, 130, 246, 0.35)' } },
         axisLine: { show: true, lineStyle: { color: 'rgba(59, 130, 246, 0.35)' } },
         splitLine: { show: false }
@@ -104,7 +97,7 @@ const chartOption = computed(() => {
         data: hasHistory ? rocketStore.historyData.velocity : emptySeries
       },
       {
-        name: '高度 (km)',
+        name: '离地高度 m',
         type: 'line',
         yAxisIndex: 1,
         smooth: true,
@@ -129,20 +122,29 @@ const chartOption = computed(() => {
 
 .data-board {
   display: flex;
-  justify-content: space-around;
-  margin-bottom: 4px;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: clamp(10px, 2vw, 20px);
+  margin-bottom: clamp(6px, 1vh, 12px);
+  padding: 0 clamp(4px, 1vw, 10px) clamp(4px, 0.6vh, 8px);
   flex-shrink: 0;
 }
 
-.data-item {
+.data-board .data-item {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
+  text-align: center;
 }
 
 .label {
   font-size: clamp(8px, 0.9vh, 11px);
   color: #aaa;
+  line-height: 1.35;
+  padding: 0 2px;
+  word-break: keep-all;
 }
 
 .value {

@@ -38,6 +38,9 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Pad 发射架经纬度：请求本机 GPS / 网络定位 -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     
     <!-- 【新增】USB Host 串口核心权限 (华为平板用) -->
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />

@@ -34,11 +34,16 @@ const NOZZLE_Y = -(TARGET_HEIGHT / 2) + (TARGET_HEIGHT * 0.025) -0.5// 喷口Y�
 const NOZZLE_WIDTH = TARGET_HEIGHT * 0.015 // 喷口宽度 (控制火焰初始生成的X/Z范围)
 const PARTICLE_SIZE = TARGET_HEIGHT * 0.075 // 粒子大小 (火箭变大，火花也要跟着变大)
 const FLAME_SPEED = TARGET_HEIGHT * 0.01 // 喷射速度的基准倍率
+const FLAME_SPEED_REF_MPS = 105 // 参考箭速 (m/s)，用于把遥测 verticalSpeed 映射到尾焰强度
+/** 遥测离地高度 (m) → 地球沿场景 Y 位移。火箭保持原位，地球下移体现升空；着陆时地球回到基准 */
+const ALTITUDE_TO_EARTH_SHIFT = 0.52
 
 // 🔥尾焰粒子系统的核心变量
 const particleCount = 2000 // 2000个粒子，足够饱满且不卡
 let particleGeometry: THREE.BufferGeometry
 let particleSystem: THREE.Points
+let particleMaterial: THREE.PointsMaterial | null = null
+let flameScaleSmoothed = 0
 // 记录每个粒子的生命周期和下落速度
 const particleData: { velocity: THREE.Vector3, life: number, maxLife: number }[] =[]
 
@@ -203,7 +208,7 @@ const initParticles = () => {
   const texture = new THREE.CanvasTexture(canvas)
 
   // 粒子材质：开启 AdditiveBlending (加性混合)，粒子重叠的地方会变得极亮，产生真实光晕
-  const particleMaterial = new THREE.PointsMaterial({
+  particleMaterial = new THREE.PointsMaterial({
     size: PARTICLE_SIZE, // 使用动态的粒子大小
     map: texture,
     blending: THREE.AdditiveBlending,
@@ -277,7 +282,8 @@ const initBackground = () => {
   earth.position.set(0, -earthRadius - 150, -150); 
   earth.rotation.x = -Math.PI / 6; 
   earth.rotation.y = Math.PI / 4;
-  rocketGroup.userData.earth = earth; 
+  rocketGroup.userData.earth = earth
+  rocketGroup.userData.earthBasePos = earth.position.clone()
   scene.add(earth);
 
   // --- 3. 极薄的大气层边缘光晕 ---
@@ -294,6 +300,7 @@ const initBackground = () => {
   })
   const atmosphere = new THREE.Mesh(atmosGeometry, atmosMaterial)
   atmosphere.position.copy(earth.position)
+  rocketGroup.userData.atmosphere = atmosphere
   scene.add(atmosphere)
 
   // --- 4. 太阳补光（灵魂！） ---
@@ -319,6 +326,19 @@ const animate = () => {
   if (rocketGroup && rocketGroup.userData.earth) {
     rocketGroup.userData.earth.rotation.y += 0.0002
   }
+
+  // 以地球为参照：高度变化移动地球与大气层；火箭保持原点，orbit 注视火箭
+  rocketGroup.position.set(0, 0, 0)
+  controls.target.copy(rocketGroup.position)
+
+  const earthMesh = rocketGroup.userData.earth as THREE.Mesh | undefined
+  const earthBase = rocketGroup.userData.earthBasePos as THREE.Vector3 | undefined
+  const atmosMesh = rocketGroup.userData.atmosphere as THREE.Mesh | undefined
+  if (earthMesh && earthBase) {
+    const shift = Math.max(0, rocketStore.heightAboveGround) * ALTITUDE_TO_EARTH_SHIFT
+    earthMesh.position.set(earthBase.x, earthBase.y - shift, earthBase.z)
+    if (atmosMesh) atmosMesh.position.copy(earthMesh.position)
+  }
   
   if (rocketModel) {
     // 1. 姿态平滑同步 (四元数) — 修复双覆盖：确保 slerp 走短弧
@@ -330,21 +350,33 @@ const animate = () => {
       targetQuat.z *= -1
     }
     rocketModel.quaternion.slerp(targetQuat, 0.2)
-    
-    // 2. 高度同步
-    rocketGroup.position.y = rocketStore.altitude * 0.1 
-    camera.position.y = (rocketStore.altitude * 0.1) + 10
-    controls.target.y = rocketStore.altitude * 0.1
+    // 2. 尾焰粒子更新（强度随箭体向上速度 verticalSpeed 同步，弹道下降/伞降时关闭）
+    const launched = rocketStore.isLaunched
+    const vs = rocketStore.verticalSpeed
+    const gf = rocketStore.gForce
+    let flameTarget = 0
+    if (launched && gf > 1.12 && vs > 3) {
+      flameTarget = THREE.MathUtils.clamp(vs / FLAME_SPEED_REF_MPS, 0.22, 2.35)
+    } else if (launched && gf > 1.35 && vs >= 0 && vs <= 8) {
+      flameTarget = 0.32
+    }
+    flameScaleSmoothed += (flameTarget - flameScaleSmoothed) * 0.14
 
-    // 3. 尾焰粒子更新
-    if (rocketStore.isLaunched) {
-      if (particleSystem && particleGeometry) {
-        particleSystem.visible = true;
+    if (launched) {
+      if (particleSystem && particleGeometry && particleMaterial) {
+        const showFlame = flameScaleSmoothed > 0.06
+        particleSystem.visible = showFlame
+
+        if (showFlame) {
+          particleMaterial.size =
+            PARTICLE_SIZE * (0.72 + 0.38 * Math.min(flameScaleSmoothed, 1.6))
+        }
 
         // 获取 position 属性
         const posAttr = particleGeometry.getAttribute('position') as THREE.BufferAttribute;
         
         if (posAttr) {
+          const f = flameScaleSmoothed
           for (let i = 0; i < particleCount; i++) {
             const data = particleData[i];
             if (!data || !data.velocity) continue;
@@ -353,6 +385,11 @@ const animate = () => {
 
             if (data.life <= 0) {
               data.life = data.maxLife;
+              data.velocity.set(
+                (Math.random() - 0.5) * 0.02,
+                -Math.random() * FLAME_SPEED - FLAME_SPEED * 0.5,
+                (Math.random() - 0.5) * 0.02
+              )
               // 官方推荐用法：直接设置第 i 个粒子的 X, Y, Z
               posAttr.setXYZ(
                 i, 
@@ -361,10 +398,10 @@ const animate = () => {
                 (Math.random() - 0.5) * NOZZLE_WIDTH
               );
             } else {
-              // 官方推荐用法：先获取当前的 X, Y, Z，加上速度
-              let currentX = posAttr.getX(i) + data.velocity.x;
-              let currentY = posAttr.getY(i) + data.velocity.y;
-              let currentZ = posAttr.getZ(i) + data.velocity.z;
+              // 官方推荐用法：先获取当前的 X, Y, Z，加上速度（按箭速倍率缩放）
+              let currentX = posAttr.getX(i) + data.velocity.x * f;
+              let currentY = posAttr.getY(i) + data.velocity.y * f;
+              let currentZ = posAttr.getZ(i) + data.velocity.z * f;
 
               // 火苗收缩塑形
               currentX *= 0.95;
@@ -379,6 +416,7 @@ const animate = () => {
         }
       } 
     } else {
+      flameScaleSmoothed = 0
       if (particleSystem) {
         particleSystem.visible = false;
       }

@@ -7,8 +7,29 @@
 
     <!-- 2. UI 覆盖层 (HUD) -->
     <div class="hud-overlay pointer-events-none">
-    <div v-if="rocketStore.showSerialSuccessToast" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-cyan-900/90 border border-cyan-400 px-8 py-4 rounded-lg text-cyan-100 font-bold text-lg shadow-[0_0_30px_rgba(34,211,238,0.5)]">
+    <div v-if="rocketStore.showSerialSuccessToast" class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-auto bg-cyan-900/90 border border-cyan-400 px-8 py-4 rounded-lg text-cyan-100 font-bold text-lg shadow-[0_0_30px_rgba(34,211,238,0.5)]">
       ✅ 串口连接成功！正在接收数据
+    </div>
+    <div
+      v-if="rocketStore.showSerialErrorToast"
+      class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[51] pointer-events-auto max-w-[min(90vw,24rem)] px-6 py-4 rounded-lg border-2 border-red-400/80 bg-red-950/95 text-red-100 text-sm sm:text-base font-bold leading-relaxed text-center shadow-[0_0_28px_rgba(248,113,113,0.35)] whitespace-pre-wrap"
+    >
+      {{ rocketStore.serialErrorMessage }}
+    </div>
+    <div
+      v-if="rocketStore.showPadLocationToast"
+      class="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[52] pointer-events-auto max-w-[min(92vw,26rem)] px-6 py-4 rounded-lg border-2 border-amber-400/85 bg-amber-950/95 text-amber-50 text-sm sm:text-base font-bold leading-relaxed text-center shadow-[0_0_28px_rgba(251,191,36,0.35)] whitespace-pre-wrap"
+      role="alert"
+    >
+      <div class="mb-2 text-amber-200/95 text-xs font-semibold tracking-wide">发射架位置（本机 GPS）</div>
+      {{ rocketStore.padLocationToastMessage }}
+      <button
+        type="button"
+        class="mt-4 w-full py-2 rounded-md border border-amber-500/60 text-amber-100 text-xs font-bold hover:bg-amber-900/50 transition-colors"
+        @click="rocketStore.dismissPadLocationToast()"
+      >
+        知道了
+      </button>
     </div>
       
       <!-- [顶部] 任务信息条 -->
@@ -30,12 +51,17 @@
           {{ realTime }}
         </div>
         <!-- 导出按钮（发射后才显示） -->
-        <div 
-          v-if="rocketStore.isLaunched" 
-          class="export-btn cursor-pointer px-3 py-1 border border-green-500/50 text-green-400 hover:bg-green-500/20 text-xs rounded transition-all" 
+        <div
+          v-if="rocketStore.isLaunched"
+          class="export-btn"
+          role="button"
+          tabindex="0"
           @click="rocketStore.exportFlightData()"
+          @keydown.enter.prevent="rocketStore.exportFlightData()"
+          @keydown.space.prevent="rocketStore.exportFlightData()"
         >
-          <span>💾 导出本次数据</span>
+          <span class="export-btn-icon" aria-hidden="true">💾</span>
+          <span class="export-btn-text">导出本次数据</span>
         </div>
         <!-- 重置按钮 -->
         <div class="reset-btn" @click="rocketStore.resetAll()">
@@ -50,34 +76,36 @@
         <aside class="hud-side-left pointer-events-auto">
           <div class="section-label">KINEMATICS / 动力学</div>
           
-          <!-- 过载 G 值 -->
-          <div class="data-item">
-            <div class="label">G-FORCE</div>
-            <div class="value-row">
-              <span class="value">{{ (rocketStore.gForce || 0).toFixed(2) }}</span>
-              <span class="unit">G</span>
+          <div class="kinematics-metrics">
+            <!-- 过载 G 值 -->
+            <div class="data-item metric-primary">
+              <div class="label">G-FORCE</div>
+              <div class="value-row">
+                <span class="value">{{ (rocketStore.gForce || 0).toFixed(2) }}</span>
+                <span class="unit">G</span>
+              </div>
+              <div class="progress-bg">
+                <div class="progress-bar" :style="{ width: Math.min((rocketStore.gForce / 5) * 100, 100) + '%' }"></div>
+              </div>
             </div>
-            <div class="progress-bg">
-              <div class="progress-bar" :style="{ width: Math.min((rocketStore.gForce / 5) * 100, 100) + '%' }"></div>
-            </div>
-          </div>
 
-          <!-- 垂直速度 -->
-          <div class="data-item">
-            <div class="label">VERT. VELOCITY</div>
-            <div class="value-row">
-              <span class="value">{{ (rocketStore.verticalSpeed || 0).toFixed(1) }}</span>
-              <span class="unit">m/s</span>
+            <!-- 垂直速度 -->
+            <div class="data-item">
+              <div class="label">VERT. VELOCITY</div>
+              <div class="value-row">
+                <span class="value">{{ (rocketStore.verticalSpeed || 0).toFixed(1) }}</span>
+                <span class="unit">m/s</span>
+              </div>
             </div>
-          </div>
 
-          <!-- 加速度三轴分布 -->
-          <div class="data-item">
-            <div class="label">ACCELERATION (X/Y/Z)</div>
-            <div class="grid grid-cols-3 gap-2 quat-stream-text">
-              <div class="bg-cyan-900/20 p-2 rounded-sm border border-cyan-500/10">X: {{ rocketStore.acc?.x.toFixed(2) }}</div>
-              <div class="bg-cyan-900/20 p-2 rounded-sm border border-cyan-500/10">Y: {{ rocketStore.acc?.y.toFixed(2) }}</div>
-              <div class="bg-cyan-900/20 p-2 rounded-sm border border-cyan-500/10">Z: {{ rocketStore.acc?.z.toFixed(2) }}</div>
+            <!-- 加速度三轴分布 -->
+            <div class="data-item metric-wide">
+              <div class="label">ACCELERATION (X/Y/Z)</div>
+              <div class="grid grid-cols-3 gap-2 quat-stream-text">
+                <div class="bg-cyan-900/20 p-2 rounded-sm border border-cyan-500/10">X: {{ rocketStore.acc?.x.toFixed(2) }}</div>
+                <div class="bg-cyan-900/20 p-2 rounded-sm border border-cyan-500/10">Y: {{ rocketStore.acc?.y.toFixed(2) }}</div>
+                <div class="bg-cyan-900/20 p-2 rounded-sm border border-cyan-500/10">Z: {{ rocketStore.acc?.z.toFixed(2) }}</div>
+              </div>
             </div>
           </div>
 
@@ -86,12 +114,18 @@
             <div class="label">FLIGHT PROFILE / 轨迹记录</div>
             <FlightChart />
           </div>
+
+          <!-- 视频链路窗口：ESP32-CAM / HM30 RTSP -->
+          <div class="data-item video-link-container border-t border-cyan-500/20 pt-3">
+            <div class="label">VIDEO LINK / 实时画面</div>
+            <VideoLink />
+          </div>
         </aside>
 
         <!-- [中间] 交互与瞄准区 -->
         <section class="hud-center">
           <!-- 发射按钮及选手登记区：仅在未发射时显示 -->
-          <div v-if="!rocketStore.isLaunched" class="launch-control-area">
+          <div v-if="!rocketStore.isLaunched" ref="launchControlAreaRef" class="launch-control-area" :style="launchControlAreaStyle">
             <!-- 选手登记区 -->
             <div class="student-input-wrapper pointer-events-auto flex flex-col items-center">
               <div class="text-cyan-500 text-xs mb-1 tracking-widest font-bold">PILOT ID / 选手登记</div>
@@ -103,18 +137,18 @@
               />
             </div>
             
-            <!-- 发射按钮 -->
-            <button class="launch-btn pointer-events-auto" @click="rocketStore.startLaunch()">
+            <!-- 数据同步：模拟=同步地面基准并发射；实时=同步并开始记录 LoRa（供导出） -->
+            <button type="button" class="launch-btn pointer-events-auto" @click="rocketStore.dataSyncAction">
               <div class="btn-content">
-                <span class="btn-status-text">SYSTEM: READY TO IGNITION</span>
-                <span class="btn-main-text">确认发射 LAUNCH</span>
+                <span class="btn-status-text">{{ rocketStore.isDemoMode ? 'SIM / 同步并发射' : 'LIVE / 同步并开始记录' }}</span>
+                <span class="btn-main-text">数据同步 DATA SYNC</span>
               </div>
               <div class="btn-scan"></div>
             </button>
           </div>
 
           <!-- 瞄准框：发射后显示，随窗口自动缩放 -->
-          <div v-else class="targeting-reticle">
+          <div v-if="rocketStore.isLaunched" class="targeting-reticle">
             <div class="reticle-bracket bracket-tl"></div>
             <div class="reticle-bracket bracket-tr"></div>
             <div class="reticle-bracket bracket-bl"></div>
@@ -131,9 +165,9 @@
                 <div class="float-label">YAW</div>
                 <div class="float-value">{{ rocketStore.yaw.toFixed(1) }}°</div>
               </div>
-              <!-- 底部：滚转水平仪 -->
-              <div class="data-item-float bottom-side">
-                <div class="float-label">ROLL / 滚转</div>
+              <!-- 顶部：滚转水平仪（原在底部易被「结束同步」遮挡，改到框上沿上方） -->
+              <div class="data-item-float roll-side-top">
+                <div class="float-label">ROLL</div>
                 <div class="float-value">{{ rocketStore.roll.toFixed(1) }}°</div>
                 <div class="roll-container">
                   <div class="roll-scale-bg"></div>
@@ -142,6 +176,22 @@
               </div>
             </div>
             <div class="center-cross"></div>
+          </div>
+
+          <!-- 同步进行中：原「数据同步」位置显示「结束同步」，与右侧归零校准底边对齐 -->
+          <div
+            v-if="rocketStore.isLaunched && rocketStore.isFlightRecording"
+            ref="endSyncControlRef"
+            class="launch-control-area"
+            :style="launchControlAreaStyle"
+          >
+            <button type="button" class="launch-btn launch-btn-end-sync pointer-events-auto" @click="rocketStore.endSyncRecording">
+              <div class="btn-content">
+                <span class="btn-status-text">{{ rocketStore.isDemoMode ? 'SIM / 停止记录样本' : 'LIVE / 停止记录样本' }}</span>
+                <span class="btn-main-text">结束同步 END SYNC</span>
+              </div>
+              <div class="btn-scan"></div>
+            </button>
           </div>
         </section>
 
@@ -181,12 +231,12 @@
              <AttitudeChart />
           </div>
 
+          <div class="data-item relative-position-panel border-t border-cyan-500/15 pt-3 flex flex-col flex-1 min-h-0">
+            <RelativePositionRadar />
+          </div>
+
           <div class="data-item source-control-panel mt-auto pt-6 border-t border-cyan-500/30">
-            <div class="label text-right mb-2 flex justify-end items-center gap-2">
-              <!-- 点击齿轮图标触发弹窗 -->
-              <span class="cursor-pointer hover:text-white transition-colors" @click="promptIpChange">⚙️</span>
-              DATA SOURCE LINK
-            </div>
+            <div class="label text-right mb-2">DATA SOURCE LINK</div>
             
             <!-- 1. 原有的模式切换按钮 -->
             <button 
@@ -198,36 +248,25 @@
               {{ rocketStore.isDemoMode ? '模拟模式 SIMULATION MODE' : '实时遥测 LIVE TELEMETRY' }}
             </button>
 
-            <!-- 2. 【修改后】LoRa 串口连接按钮，动态文字+动态事件 -->
-            <div class="data-item">
-              <button 
-                v-if="!rocketStore.isWsConnected"
-                class="mode-toggle-btn w-full border-purple-500 text-purple-400 bg-purple-500/10 hover:bg-purple-500/20"
-                @click="handleConnectSerial"
-              >
-                <span class="w-2 h-2 rounded-full mr-3 bg-purple-400 shadow-[0_0_8px_#a855f7]"></span>
-                <!-- 【关键】动态文字，根据平台自动切换 -->
-                {{ isNativeAndroid ? '🔌 连接 USB 串口 (PAD)' : '🔌 连接 LORA 串口 (WINDOWS)' }}
-              </button>
-              <div v-else class="flex items-center justify-center w-full py-2 border border-green-500/30 bg-green-500/10 text-[10px] text-green-400 font-bold tracking-widest">
-                <span class="w-2 h-2 rounded-full mr-2 bg-green-400 shadow-[0_0_8px_#22c55e] animate-pulse"></span>
-                SERIAL LINK ACTIVE
-              </div>
-            </div>
+            <!-- LoRa 串口：始终同一按钮发起/重连，链路状态见右下角 HUD -->
+            <button
+              type="button"
+              class="mode-toggle-btn w-full border-purple-500 text-purple-400 bg-purple-500/10 hover:bg-purple-500/20"
+              @click="handleConnectSerial"
+            >
+              <span class="w-2 h-2 rounded-full mr-3 bg-purple-400 shadow-[0_0_8px_#a855f7]"></span>
+              🔌 连接 LoRa 串口
+            </button>
 
             <!-- 3. 【新增】一键归零校准按钮 -->
             <button
+              ref="calibrateZeroBtnRef"
               class="mode-toggle-btn w-full mt-2 border-green-500 text-green-400 bg-green-500/10 hover:bg-green-500/20"
               @click="rocketStore.calibrateZero"
             >
               <span class="w-2 h-2 rounded-full mr-3 bg-green-400 shadow-[0_0_8px_#22c55e]"></span>
               🎯 归零校准（水平放置后点击）
             </button>
-
-            <!-- 显示当前绑定的 IP 地址 -->
-            <div class="text-[9px] text-right mt-2 text-gray-500 font-mono">
-              TARGET: {{ rocketStore.sensorIp }}
-            </div>
           </div>
         </aside>
       </main>
@@ -236,8 +275,12 @@
       <footer class="hud-footer pointer-events-auto">
         <div class="env-group">
           <div class="env-box">
-            <span class="label">ALTITUDE</span>
-            <span class="val">{{ rocketStore.altitude.toFixed(3) }}</span><span class="u">km</span>
+            <span class="label">海拔 AMSL</span>
+            <span class="val">{{ rocketStore.altitudeMsl.toFixed(1) }}</span><span class="u">m</span>
+          </div>
+          <div class="env-box">
+            <span class="label">离地 AGL</span>
+            <span class="val">{{ rocketStore.heightAboveGround.toFixed(1) }}</span><span class="u">m</span>
           </div>
           <div class="env-box">
             <span class="label">PRESSURE</span>
@@ -259,18 +302,149 @@
         </div>
       </footer>
     </div>
+
+    <!-- 结束同步后：根据已记录样本生成的数据简报（居中，可关闭） -->
+    <div
+      v-if="rocketStore.syncBriefing"
+      class="sync-briefing-layer pointer-events-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="sync-briefing-title"
+    >
+      <div class="sync-briefing-backdrop" @click="rocketStore.dismissSyncBriefing()" />
+      <article class="sync-briefing-panel" @click.stop>
+        <header class="sync-briefing-header">
+          <h2 id="sync-briefing-title" class="sync-briefing-title">数据简报</h2>
+          <p class="sync-briefing-sub">
+            <span class="text-cyan-200/90">{{ rocketStore.syncBriefing.pilotName }}</span>
+            <span class="mx-2 text-cyan-600">·</span>
+            <span :class="rocketStore.syncBriefing.isDemoMode ? 'text-amber-400' : 'text-cyan-400'">
+              {{ rocketStore.syncBriefing.isDemoMode ? '模拟数据' : '实时遥测' }}
+            </span>
+          </p>
+        </header>
+
+        <div v-if="rocketStore.syncBriefing.sampleCount === 0" class="sync-briefing-empty text-amber-200/90 text-sm py-2">
+          本段同步窗口内未采集到样本（可能记录时间过短）。仍可继续飞行或导出检查。
+        </div>
+
+        <div v-else class="sync-briefing-body">
+          <section class="sb-card">
+            <h3 class="sb-card-title">基础记录</h3>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">采样点数</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.sampleCount }}</span>
+              </div>
+              <div class="sb-tile">
+                <span class="sb-tile-label">记录时长</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.durationSec.toFixed(2) }} s</span>
+              </div>
+            </div>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">约采样率</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.avgSampleRateHz.toFixed(1) }} Hz</span>
+              </div>
+              <div class="sb-tile">
+                <span class="sb-tile-label">最大离地高度 AGL</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.maxHeightAglM.toFixed(2) }} m</span>
+              </div>
+            </div>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">最大速度（全程）</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.maxVelocityMs.toFixed(2) }} m/s</span>
+              </div>
+              <div class="sb-tile">
+                <span class="sb-tile-label">最大合加速度等效</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.maxAccG.toFixed(2) }} G</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="sb-card">
+            <h3 class="sb-card-title">剖面与时序</h3>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">最大高度对应时刻 t</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.timeAtMaxAglSec.toFixed(2) }} s</span>
+              </div>
+              <div class="sb-tile" title="本段记录最后一帧的任务时间，与顶点时刻对照可看过顶后覆盖的时长">
+                <span class="sb-tile-label">末帧任务时间 t₁</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.missionEndTimeSec.toFixed(2) }} s</span>
+              </div>
+            </div>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">上升段历时（至顶）</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.ascentDurationSec.toFixed(2) }} s</span>
+              </div>
+              <div class="sb-tile">
+                <span class="sb-tile-label">过顶后历时</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.descentDurationSec.toFixed(2) }} s</span>
+              </div>
+            </div>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">上升段速度峰值</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.ascentMaxVelocityMs.toFixed(2) }} m/s</span>
+              </div>
+              <div class="sb-tile">
+                <span class="sb-tile-label">下降段速度峰值</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.descentMaxVelocityMs.toFixed(2) }} m/s</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="sb-card">
+            <h3 class="sb-card-title">姿态与角运动</h3>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">俯仰角峰值（|θ|）</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.maxAbsPitchDeg.toFixed(1) }} °</span>
+              </div>
+              <div class="sb-tile">
+                <span class="sb-tile-label">滚转角峰值（|γ|）</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.maxAbsRollDeg.toFixed(1) }} °</span>
+              </div>
+            </div>
+            <div class="sb-pair">
+              <div class="sb-tile">
+                <span class="sb-tile-label">俯仰标准差 σ<sub>θ</sub></span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.pitchStdDeg.toFixed(2) }} °</span>
+              </div>
+              <div
+                class="sb-tile"
+                title="本窗口内 √(ωx²+ωy²+ωz²) 峰值，反映箭体扭转剧烈程度"
+              >
+                <span class="sb-tile-label">合成角速度峰值 |ω|</span>
+                <span class="sb-tile-value">{{ rocketStore.syncBriefing.maxGyroVectorDegS.toFixed(0) }} °/s</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <button type="button" class="sync-briefing-close" @click="rocketStore.dismissSyncBriefing()">
+          关闭
+        </button>
+      </article>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import RocketScene from './components/RocketScene.vue'
 import { useRocketStore } from './store/rocket'
 import FlightChart from './components/FlightChart.vue'
 import AttitudeChart from './components/AttitudeChart.vue'
+import RelativePositionRadar from './components/RelativePositionRadar.vue'
+import VideoLink from './components/HUD/VideoLink.vue'
 import { StatusBar } from '@capacitor/status-bar'
+import { App } from '@capacitor/app'
 // 【新增】引入 Capacitor 核心对象
-import { Capacitor } from '@capacitor/core'
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core'
 
 const rocketStore = useRocketStore()
 
@@ -322,6 +496,9 @@ const syncHudViewport = () => {
   document.documentElement.style.setProperty('--app-height', `${stableViewportHeight}px`)
   document.documentElement.style.setProperty('--keyboard-lift', `${Math.round(keyboardLift)}px`)
   restoreScrollOrigin()
+  window.requestAnimationFrame(() => {
+    alignLaunchControlToCalibrateBottom()
+  })
 }
 
 const scheduleViewportRestore = () => {
@@ -338,6 +515,7 @@ const resetStableViewport = () => {
 // 1. 实时时钟逻辑
 const realTime = ref('')
 let clockTimer: number
+let padLocationResumeListener: PluginListenerHandle | undefined
 
 const updateClock = () => {
   const now = new Date()
@@ -347,13 +525,13 @@ const updateClock = () => {
     now.toTimeString().split(' ')[0]
 }
 
-// 动态计算网络链路文案
+// 动态计算 LoRa 链路文案
 const linkStatusText = computed(() => {
-  if (rocketStore.isDemoMode) return 'TELEMETRY: SIMULATION MODE'
-  return rocketStore.isWsConnected ? 'TELEMETRY: WS LINK ACTIVE' : 'TELEMETRY: CONNECTION LOST'
+  if (rocketStore.isDemoMode) return 'LORA: SIMULATION MODE'
+  return rocketStore.isWsConnected ? 'LORA: SERIAL LINK ACTIVE' : 'LORA: SERIAL LINK LOST'
 })
 
-// 动态计算网络链路颜色
+// 动态计算 LoRa 链路颜色
 const linkStatusColor = computed(() => {
   if (rocketStore.isDemoMode) return 'text-orange-400'
   return rocketStore.isWsConnected ? 'text-green-400' : 'text-red-500 animate-pulse' // 断开时红色闪烁
@@ -362,8 +540,59 @@ const linkStatusColor = computed(() => {
 // 动态计算传感器文案
 const sensorStatusText = computed(() => {
   if (rocketStore.isDemoMode) return 'IMU: VIRTUAL / SENSOR: EMULATED'
-  return rocketStore.isWsConnected ? 'IMU: STREAMING / GPS: 3D FIX' : 'IMU: OFFLINE / SENSOR: N/A'
+  return rocketStore.isWsConnected ? 'IMU: STREAMING VIA LORA' : 'IMU: WAITING FOR LORA SERIAL'
 })
+
+/** 中间「数据同步」/「结束同步」区域底边与右侧「归零校准」按钮底边对齐 */
+const launchControlAreaRef = ref<HTMLElement | null>(null)
+const endSyncControlRef = ref<HTMLElement | null>(null)
+const calibrateZeroBtnRef = ref<HTMLButtonElement | null>(null)
+const launchControlBottomPx = ref<number | null>(null)
+
+function alignLaunchControlToCalibrateBottom() {
+  const cal = calibrateZeroBtnRef.value
+  const launch = launchControlAreaRef.value
+  const endSync = endSyncControlRef.value
+  if (!cal) {
+    launchControlBottomPx.value = null
+    return
+  }
+  if (!rocketStore.isLaunched) {
+    if (!launch) {
+      launchControlBottomPx.value = null
+      return
+    }
+  } else if (rocketStore.isFlightRecording) {
+    if (!endSync) {
+      launchControlBottomPx.value = null
+      return
+    }
+  } else {
+    launchControlBottomPx.value = null
+    return
+  }
+  const vh = window.visualViewport?.height ?? window.innerHeight
+  const calBottom = cal.getBoundingClientRect().bottom
+  launchControlBottomPx.value = Math.max(0, Math.round(vh - calBottom))
+}
+
+const launchControlAreaStyle = computed(() => {
+  const b = launchControlBottomPx.value
+  return {
+    bottom:
+      b != null
+        ? `${b}px`
+        : `calc(clamp(100px, 13.5vh, 132px) + env(safe-area-inset-bottom, 0px))`,
+    top: 'auto',
+  }
+})
+
+watch(
+  () => [rocketStore.isLaunched, rocketStore.isFlightRecording] as const,
+  () => {
+    nextTick(() => requestAnimationFrame(alignLaunchControlToCalibrateBottom))
+  },
+)
 
 onMounted(() => {
   updateClock()
@@ -375,12 +604,23 @@ onMounted(() => {
   window.addEventListener('focusout', scheduleViewportRestore)
   window.visualViewport?.addEventListener('resize', syncHudViewport)
   window.visualViewport?.addEventListener('scroll', restoreScrollOrigin)
-  
-  // 1. 启动 WebSocket 连接
-  rocketStore.initWebSocket()
-  
-  // 2. 启动演示模式的循环心跳
+  // 启动演示模式的循环心跳
   rocketStore.startDemoLoop()
+
+  // 启动即请求本机定位作为发射架 PAD（与模拟/实时模式无关）
+  void rocketStore.initPadLocationFromDevice()
+
+  /* 从「最近任务」或设置返回前台时重试：很多人先在系统里开权限，再回应用，仅 onMounted 不会再次执行 */
+  if (Capacitor.isNativePlatform()) {
+    void App.addListener('resume', () => {
+      void rocketStore.initPadLocationFromDevice()
+    }).then((handle) => {
+      padLocationResumeListener = handle
+    })
+  }
+
+  window.setTimeout(() => alignLaunchControlToCalibrateBottom(), 280)
+  window.setTimeout(() => alignLaunchControlToCalibrateBottom(), 900)
 
   // 3. 隐藏原生状态栏 (如果装了插件的话)
   if (window.StatusBar) {
@@ -397,23 +637,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('focusout', scheduleViewportRestore)
   window.visualViewport?.removeEventListener('resize', syncHudViewport)
   window.visualViewport?.removeEventListener('scroll', restoreScrollOrigin)
+  void padLocationResumeListener?.remove()
+  padLocationResumeListener = undefined
 })
-
-const promptIpChange = () => {
-  const currentIp = rocketStore.sensorIp
-  const newIp = window.prompt('请输入传感器局域网 IP 地址 (例如 192.168.0.114):', currentIp)
-  
-  if (newIp && newIp !== currentIp) {
-    // 简单的 IP 格式校验
-    const ipRegex = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/
-    if (ipRegex.test(newIp)) {
-      rocketStore.setSensorIp(newIp)
-      alert('IP 配置已更新并永久保存。')
-    } else {
-      alert('输入的 IP 格式不正确，请重新输入。')
-    }
-  }
-}
 
 // 【保留】原来的 Windows 串口连接函数
 const connectSerial = async () => {
@@ -443,9 +669,10 @@ const handleConnectSerial = async () => {
    1. 基础布局
    ========================================= */
 .hud-container {
-  @apply relative w-screen bg-black overflow-hidden text-white selection:bg-cyan-500/30;
+  @apply relative w-full max-w-full bg-black overflow-hidden text-white selection:bg-cyan-500/30;
+  min-height: var(--app-height, 100dvh);
   height: var(--app-height, 100dvh);
-  max-height: var(--app-height, 100dvh);
+  max-height: none;
 }
 
 .scene-layer {
@@ -454,6 +681,169 @@ const handleConnectSerial = async () => {
 
 .hud-overlay {
   @apply absolute inset-0 z-10 flex flex-col;
+}
+
+/* 结束同步：数据简报（视口居中，高于 HUD） */
+.sync-briefing-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(12px, 3vw, 20px);
+}
+
+.sync-briefing-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.sync-briefing-panel {
+  position: relative;
+  width: min(94vw, 32rem);
+  max-width: min(94vw, 32rem);
+  max-height: none;
+  overflow: visible;
+  padding: 0.72rem 0.78rem 0.88rem;
+  border-radius: 12px;
+  border: 1px solid rgba(45, 212, 191, 0.38);
+  background:
+    radial-gradient(120% 80% at 50% -20%, rgba(45, 212, 191, 0.12) 0%, transparent 55%),
+    linear-gradient(168deg, rgba(8, 47, 54, 0.97) 0%, rgba(2, 10, 16, 0.99) 100%);
+  box-shadow:
+    0 0 48px rgba(34, 211, 238, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+@media (min-width: 640px) {
+  .sync-briefing-panel {
+    width: min(88vw, 36rem);
+    max-width: min(88vw, 36rem);
+    padding: 0.8rem 0.9rem 0.95rem;
+  }
+}
+
+.sync-briefing-header {
+  text-align: center;
+  margin-bottom: 0.45rem;
+}
+
+.sync-briefing-title {
+  font-size: clamp(0.88rem, 1.9vh, 1.15rem);
+  letter-spacing: 0.28em;
+  font-weight: 900;
+  color: rgba(207, 250, 254, 0.95);
+  text-shadow: 0 0 18px rgba(34, 211, 238, 0.45);
+  margin: 0;
+}
+
+.sync-briefing-sub {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: rgba(148, 163, 184, 0.95);
+}
+
+.sync-briefing-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sb-card {
+  margin: 0;
+  padding: 0.48rem 0.52rem 0.52rem;
+  border-radius: 10px;
+  border: 1px solid rgba(45, 212, 191, 0.16);
+  background: linear-gradient(168deg, rgba(6, 36, 42, 0.65) 0%, rgba(2, 14, 22, 0.82) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.sb-card-title {
+  margin: 0 0 0.4rem;
+  padding-left: 0.42rem;
+  border-left: 3px solid rgba(45, 212, 191, 0.88);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: rgba(167, 243, 208, 0.95);
+  line-height: 1.35;
+}
+
+.sb-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.sb-pair:last-child {
+  margin-bottom: 0;
+}
+
+@media (max-width: 419px) {
+  .sb-pair {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sb-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.22rem;
+  min-height: 3.1rem;
+  padding: 0.38rem 0.46rem;
+  border-radius: 8px;
+  border: 1px solid rgba(34, 211, 238, 0.12);
+  background: linear-gradient(180deg, rgba(12, 42, 50, 0.5) 0%, rgba(0, 10, 16, 0.55) 100%);
+}
+
+.sb-tile-label {
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: rgba(148, 163, 184, 0.96);
+}
+
+.sb-tile-label sub {
+  font-size: 0.55em;
+  vertical-align: baseline;
+}
+
+.sb-tile-value {
+  font-size: clamp(0.82rem, 1.45vh, 0.98rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: rgba(240, 253, 250, 0.98);
+  text-shadow: 0 0 14px rgba(45, 212, 191, 0.15);
+}
+
+.sync-briefing-close {
+  margin-top: 0.55rem;
+  width: 100%;
+  padding: 0.48rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid rgba(45, 212, 191, 0.42);
+  background: rgba(13, 59, 68, 0.45);
+  color: rgba(236, 253, 245, 0.96);
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.22em;
+  cursor: pointer;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.sync-briefing-close:hover {
+  background: rgba(20, 83, 95, 0.55);
+  border-color: rgba(94, 234, 212, 0.65);
+  box-shadow: 0 0 20px rgba(45, 212, 191, 0.12);
 }
 
 /* =========================================
@@ -518,16 +908,26 @@ const handleConnectSerial = async () => {
 .hud-main {
   @apply flex-1 relative flex justify-between px-10 py-6;
   padding-top: clamp(12px, 2vh, 24px);
-  padding-bottom: clamp(12px, 2vh, 24px);
+  padding-bottom: clamp(6px, 1vh, 12px);
   min-height: 0;
 }
 
 .hud-side-left, .hud-side-right {
-  width: 18vw;         /* 强制左右宽度对称 */
-  min-width: 350px;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 1vh;            /* 数据项间距 */
+  gap: clamp(5px, 0.7vh, 9px);
+}
+
+.hud-side-left {
+  width: clamp(330px, 26vw, 465px);
+  min-width: 330px;
+}
+
+.hud-side-right {
+  width: clamp(300px, 20vw, 390px);
+  min-width: 300px;
 }
 
 .hud-side-left .grid div {
@@ -546,6 +946,21 @@ const handleConnectSerial = async () => {
 
 .data-item { @apply flex flex-col gap-0 w-full; }
 
+.kinematics-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.92fr);
+  gap: clamp(5px, 0.75vh, 9px) clamp(8px, 1vw, 14px);
+  flex-shrink: 0;
+}
+
+.kinematics-metrics .data-item {
+  min-width: 0;
+}
+
+.kinematics-metrics .metric-wide {
+  grid-column: 1 / -1;
+}
+
 .data-item .label {
   font-size: 0.95vh;
   @apply text-gray-400 uppercase tracking-wider mb-1;
@@ -555,7 +970,7 @@ const handleConnectSerial = async () => {
 /* 数值与单位样式 */
 .value-row { @apply flex items-baseline gap-2; }
 .value {
-  font-size: 2.35vh; 
+  font-size: 2.15vh; 
   @apply font-black tabular-nums text-white;
 }
 
@@ -572,14 +987,48 @@ const handleConnectSerial = async () => {
   @apply text-gray-500 ml-1 font-bold;
 }
 
-/* 图表容器尺寸适配 */
+/* 图表：高度大致维持，少占纵向份额；余量给视频 */
 .chart-container-l {
-  height: clamp(130px, 28vh, 190px);
-  margin-top: clamp(20px, 3vh, 30px) !important;
-  padding-top: clamp(16px, 2.6vh, 26px) !important;
+  flex: 0.85 1 minmax(0, 1fr);
+  min-height: clamp(185px, 30vh, 300px);
+  max-height: clamp(220px, 34vh, 320px);
+  margin-top: clamp(6px, 0.9vh, 12px) !important;
+  padding-top: clamp(7px, 1vh, 12px) !important;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   @apply border-t border-cyan-500/10;
 }
-.chart-container-r { height: clamp(120px, 25vh, 175px); }
+
+.chart-container-l :deep(.chart-container) {
+  flex: 1;
+  min-height: 0;
+}
+
+.video-link-container {
+  --video-window-height: clamp(215px, 40vh, 360px);
+  flex: 1.45 1 minmax(0, 1fr);
+  min-height: 0;
+  margin-top: clamp(4px, 0.7vh, 10px) !important;
+  padding-top: clamp(6px, 0.9vh, 10px) !important;
+  display: flex;
+  flex-direction: column;
+  @apply border-t border-cyan-500/10;
+}
+
+.video-link-container :deep(.video-link:not(.fullscreen)) {
+  width: min(100%, calc(var(--video-window-height) * 16 / 9));
+  max-width: 100%;
+  max-height: none;
+  flex: 0 0 auto;
+}
+
+.chart-container-r { height: clamp(170px, 32vh, 260px); }
+
+.relative-position-panel {
+  flex: 1 1 auto;
+  min-height: clamp(120px, 18vh, 200px);
+}
 
 /* 原始数据流样式 (解决调不动的问题) */
 .quat-stream-container { @apply opacity-80; }
@@ -597,26 +1046,41 @@ const handleConnectSerial = async () => {
    4. 中间瞄准与按钮 (响应式适配)
    ========================================= */
 .hud-center {
-  @apply flex-1 relative flex justify-center items-center;
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
 }
 
-/* 发射与登记控制区 */
+/* 发射与登记：全屏水平居中；bottom 由脚本与右侧「归零校准」按钮底边对齐 */
 .launch-control-area {
-  position: absolute;
-  top: 50%;
+  position: fixed;
   left: 50%;
-  transform: translate(-50%, calc(24vh - var(--keyboard-lift, 0px)));
+  top: auto;
+  transform: translate(-50%, calc(0px - var(--keyboard-lift, 0px)));
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(6px, 0.9vh, 10px);
+  justify-content: flex-start;
+  width: min(420px, 92vw);
+  max-width: min(420px, 92vw);
+  padding: 0 clamp(12px, 4vw, 28px);
+  box-sizing: border-box;
+  gap: clamp(8px, 1vh, 12px);
+  z-index: 15;
+  pointer-events: auto;
   transition: transform 0.18s ease-out;
 }
 
 .student-input-wrapper {
   transform: scale(0.82);
-  transform-origin: center bottom;
-  margin-bottom: -0.8vh;
+  transform-origin: center center;
+  width: 100%;
+  max-width: 320px;
+  margin-bottom: 0.15vh;
 }
 
 .student-input-wrapper input {
@@ -648,18 +1112,29 @@ const handleConnectSerial = async () => {
   @apply border-cyan-300 shadow-[0_0_20px_rgba(0,255,255,0.2)];
 }
 
+.launch-btn-end-sync {
+  background: rgba(251, 191, 36, 0.08);
+  @apply border-amber-500/50 text-amber-300;
+}
+
+.launch-btn-end-sync:hover {
+  background: rgba(251, 191, 36, 0.18);
+  @apply border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.25)];
+}
+
 .btn-content { @apply flex flex-col items-center justify-center h-full w-full whitespace-nowrap; }
 .btn-status-text { font-size: clamp(8px, 0.8vh, 10px); @apply opacity-50 mb-1 tracking-widest; }
 .btn-main-text { font-size: clamp(15px, 1.8vh, 20px); @apply font-black tracking-widest text-shadow-glow; }
 
-/* 瞄准框容器 */
+/* 瞄准框：fixed 以视口中心为锚点，与全屏 3D 火箭轴线对齐 */
 .targeting-reticle {
-  position: absolute;
+  position: fixed;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -55%);
+  transform: translate(-50%, -50%);
   height: 65vh;
   width: calc(65vh * 0.55);
+  z-index: 12;
   @apply pointer-events-none flex justify-center items-center;
 }
 
@@ -674,7 +1149,20 @@ const handleConnectSerial = async () => {
 
 .left-side { @apply top-1/2 -translate-y-1/2 items-end; left: -3vh; }
 .right-side { @apply top-1/2 -translate-y-1/2 items-start; right: -3vh; }
-.bottom-side { @apply left-1/2 -translate-x-1/2; bottom: -8vh; }
+/* 滚转：贴在瞄准框上沿之上；translateY 略向下避免顶到页眉（Pad 上再加大） */
+.roll-side-top {
+  left: 50%;
+  transform: translate(-50%, 1.1vh);
+  bottom: 100%;
+  margin-bottom: 0.6vh;
+  flex-direction: column;
+}
+
+@media (max-width: 1024px) {
+  .roll-side-top {
+    transform: translate(-50%, 2.8vh);
+  }
+}
 
 /* 滚转水平仪样式 */
 .roll-container { @apply relative w-16 h-4 mt-2 flex items-center justify-center; }
@@ -696,17 +1184,24 @@ const handleConnectSerial = async () => {
    5. 底部状态栏 (已精简调优)
    ========================================= */
 .hud-footer {
-  @apply h-20 bg-black/50 backdrop-blur-md border-t border-cyan-500/10 flex items-center justify-between px-12;
-  height: clamp(56px, 10vh, 80px);
+  @apply backdrop-blur-md border-t border-cyan-500/10 flex items-center justify-between px-12;
+  flex-shrink: 0;
+  min-height: clamp(42px, 7vh, 54px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
+  background: rgba(8, 145, 178, 0.26);
+  -webkit-backdrop-filter: blur(16px) saturate(145%);
+  backdrop-filter: blur(16px) saturate(145%);
+  box-shadow: inset 0 1px 18px rgba(34, 211, 238, 0.1);
 }
 
-.env-group { @apply flex gap-16; }
+.env-group { @apply flex gap-12; }
 .env-box { @apply flex flex-col; }
-.env-box .label { font-size: 0.9vh; @apply text-gray-500 font-bold mb-0 opacity-80; }
-.env-box .val { font-size: 2.3vh; @apply font-black tabular-nums text-cyan-400; }
-.env-box .u { font-size: 1vh; @apply text-cyan-900 font-bold ml-1; }
+.env-box .label { font-size: clamp(7px, 0.75vh, 9px); @apply text-cyan-100/55 font-bold mb-0 opacity-80; }
+.env-box .val { font-size: clamp(14px, 1.8vh, 20px); @apply font-black tabular-nums text-cyan-300; line-height: 1; }
+.env-box .u { font-size: clamp(7px, 0.85vh, 9px); @apply text-cyan-700 font-bold ml-1; }
 
-.system-logs { font-size: 0.9vh; @apply text-green-700 font-mono text-right leading-tight opacity-70; }
+.system-logs { font-size: clamp(7px, 0.75vh, 9px); @apply text-green-300/75 font-mono text-right leading-tight opacity-80; }
 
 /* =========================================
    6. 动画与特效
@@ -717,6 +1212,55 @@ const handleConnectSerial = async () => {
   @apply absolute top-0 -left-full w-full h-full;
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
   animation: launch-scan 4s infinite linear;
+}
+
+/* 导出 CSV：与重置按钮同系的 HUD 青灰小 pill，略小一号 */
+.export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.82vh !important;
+  line-height: 1.2;
+  padding: 0.18rem 0.42rem 0.2rem;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  border: 1px solid rgba(34, 211, 238, 0.32);
+  color: rgba(207, 250, 254, 0.92);
+  background: linear-gradient(180deg, rgba(12, 55, 66, 0.55) 0%, rgba(4, 24, 32, 0.65) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    color 0.2s ease;
+}
+
+.export-btn:hover {
+  border-color: rgba(94, 234, 212, 0.5);
+  background: linear-gradient(180deg, rgba(18, 75, 88, 0.65) 0%, rgba(6, 40, 52, 0.75) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 14px rgba(34, 211, 238, 0.12);
+  color: rgba(240, 253, 250, 0.98);
+}
+
+.export-btn:active {
+  transform: scale(0.97);
+}
+
+.export-btn-icon {
+  font-size: 0.95em;
+  line-height: 1;
+  opacity: 0.88;
+}
+
+.export-btn-text {
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 /* 重置按钮：做得更精简 */
