@@ -318,7 +318,8 @@ function witStyleRpyDegToQuaternion(rollDeg: number, pitchDeg: number, yawDeg: n
 /** 模拟用：参考典型小型固体「公里级」探空/科创火箭剖面，量纲与阶段与实飞一致 */
 const DEMO_G = 9.80665
 const DEMO_IGNITION_END_S = 0.28
-const DEMO_BURNOUT_S = 4.72
+/** 模拟助推结束时刻 (s)；与 `RocketScene` 尾焰等展示逻辑共用，避免助推外误显尾焰 */
+export const DEMO_BURNOUT_S = 4.72
 const DEMO_NET_ACCEL_BOOST = 27
 const DEMO_DRAG_K = 0.0022
 const DEMO_MAIN_DEPLOY_ALT_M = 450

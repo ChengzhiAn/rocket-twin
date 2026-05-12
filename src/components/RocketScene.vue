@@ -7,7 +7,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { useRocketStore } from '../store/rocket'
+import { useRocketStore, DEMO_BURNOUT_S } from '../store/rocket'
 import { SplashScreen } from '@capacitor/splash-screen';
 
 const rocketStore = useRocketStore()
@@ -355,7 +355,16 @@ const animate = () => {
     const vs = rocketStore.verticalSpeed
     const gf = rocketStore.gForce
     let flameTarget = 0
-    if (launched && gf > 1.12 && vs > 3) {
+    if (rocketStore.isDemoMode) {
+      // 伞降/风漂阶段合成加速度会短时 >1g，竖向速度也可能落在启发式窗口内，造成约 400–500 m 误闪；模拟尾焰仅绑定助推段
+      if (launched && rocketStore.flightTime < DEMO_BURNOUT_S) {
+        flameTarget = THREE.MathUtils.clamp(
+          Math.max(vs, 14) / FLAME_SPEED_REF_MPS,
+          0.22,
+          2.35,
+        )
+      }
+    } else if (launched && gf > 1.12 && vs > 3) {
       flameTarget = THREE.MathUtils.clamp(vs / FLAME_SPEED_REF_MPS, 0.22, 2.35)
     } else if (launched && gf > 1.35 && vs >= 0 && vs <= 8) {
       flameTarget = 0.32
