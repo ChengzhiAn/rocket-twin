@@ -32,11 +32,6 @@
         </button>
       </div>
     </div>
-
-    <footer class="video-footer">
-      <span class="stream-address">{{ streamUrlDisplay }}</span>
-      <button type="button" class="small-action" @click="reconnect">RECONNECT</button>
-    </footer>
   </section>
 </template>
 
@@ -52,6 +47,10 @@ const imageLoaded = ref(false)
 const isFullscreen = ref(false)
 
 let healthTimer: number | undefined
+let healthPollSeq = 0
+let lastStreamRestartAt = 0
+
+const streamRetryMs = 4000
 
 const normalizedHost = computed(() => {
   return rocketStore.esp32CamHost
@@ -63,15 +62,41 @@ const normalizedHost = computed(() => {
 })
 
 const streamUrl = computed(() => `http://${normalizedHost.value}:81/stream?cb=${streamKey.value}`)
-const streamUrlDisplay = computed(() => `http://${normalizedHost.value}:81/stream`)
 const healthUrl = computed(() => `http://${normalizedHost.value}/health`)
 
 const isLinkActive = computed(() => healthOk.value && imageLoaded.value)
 
-function reconnect() {
+function restartStream(force = false) {
+  const now = Date.now()
+  if (!force && now - lastStreamRestartAt < streamRetryMs) return
+
   imageLoaded.value = false
+  streamKey.value = now
+  lastStreamRestartAt = now
+}
+
+function updateHealthStatus(ok: boolean) {
+  const wasHealthy = healthOk.value
+  healthOk.value = ok
+
+  if (!ok) {
+    imageLoaded.value = false
+    return
+  }
+
+  if (!wasHealthy) {
+    restartStream(true)
+    return
+  }
+
+  if (!imageLoaded.value) {
+    restartStream()
+  }
+}
+
+function reconnect() {
   healthOk.value = false
-  streamKey.value = Date.now()
+  restartStream(true)
   void pollHealth()
 }
 
@@ -81,6 +106,7 @@ function handleStreamLoad() {
 
 function handleStreamError() {
   imageLoaded.value = false
+  if (healthOk.value) restartStream()
 }
 
 function toggleFullscreen() {
@@ -88,17 +114,20 @@ function toggleFullscreen() {
 }
 
 async function pollHealth() {
+  const pollSeq = ++healthPollSeq
+  const ctrl = new AbortController()
+  const timeout = window.setTimeout(() => ctrl.abort(), 2200)
+
   try {
-    const ctrl = new AbortController()
-    const timeout = window.setTimeout(() => ctrl.abort(), 2200)
     const response = await fetch(healthUrl.value, {
       signal: ctrl.signal,
       cache: 'no-store',
     })
-    window.clearTimeout(timeout)
-    healthOk.value = response.ok
+    if (pollSeq === healthPollSeq) updateHealthStatus(response.ok)
   } catch {
-    healthOk.value = false
+    if (pollSeq === healthPollSeq) updateHealthStatus(false)
+  } finally {
+    window.clearTimeout(timeout)
   }
 }
 
@@ -261,45 +290,16 @@ onBeforeUnmount(() => {
   letter-spacing: 0.16em;
 }
 
-.reconnect-btn,
-.small-action {
+.reconnect-btn {
   border: 1px solid rgba(34, 211, 238, 0.55);
   background: rgba(8, 145, 178, 0.22);
   color: #a5f3fc;
   font-weight: 900;
   letter-spacing: 0.18em;
   box-shadow: inset 0 0 14px rgba(34, 211, 238, 0.08);
-}
-
-.reconnect-btn {
   margin-top: 4px;
   padding: 7px 16px;
   font-size: 10px;
-}
-
-.video-footer {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 6px;
-  border-top: 1px solid rgba(34, 211, 238, 0.18);
-  font-size: 8px;
-  color: rgba(103, 232, 249, 0.62);
-}
-
-.stream-address {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.small-action {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  font-size: 8px;
 }
 
 .is-fullscreen {
