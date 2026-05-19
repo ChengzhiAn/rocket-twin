@@ -6,9 +6,12 @@
   - PSRAM enabled in Arduino IDE
 
   Network:
-  - AP SSID: RocketCam
+  - AP SSID: LH-RocketCam-9527
+  - AP password: rocket9527
+  - AP channel: 6
   - Preview: http://192.168.4.1/
   - MJPEG:   http://192.168.4.1:81/stream
+  - Snapshot: http://192.168.4.1/snapshot
   - Health:  http://192.168.4.1/health
 */
 
@@ -35,8 +38,15 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-const char* AP_SSID = "RocketCam";
-const char* AP_PASSWORD = "";
+const char* AP_SSID = "LH-RocketCam-9527";
+const char* AP_PASSWORD = "rocket9527";
+const int AP_CHANNEL = 6;
+const int AP_MAX_CLIENTS = 1;
+
+const int JPEG_QUALITY_PSRAM = 16;
+const int JPEG_QUALITY_DRAM = 18;
+const int STREAM_FRAME_DELAY_MS = 100;
+const int MAX_CAPTURE_FAILURES = 30;
 
 IPAddress localIp(192, 168, 4, 1);
 IPAddress gateway(192, 168, 4, 1);
@@ -44,6 +54,16 @@ IPAddress subnet(255, 255, 255, 0);
 
 WiFiServer previewServer(80);
 WiFiServer streamServer(81);
+
+void handleStreamClient(WiFiClient client);
+void sendSnapshot(WiFiClient& client);
+
+struct StreamClientContext {
+  WiFiClient client;
+};
+
+WiFiClient activeStreamClient;
+TaskHandle_t activeStreamTask = nullptr;
 
 void drainHttpHeaders(WiFiClient& client) {
   unsigned long deadline = millis() + 1500;
@@ -90,12 +110,12 @@ void startCamera() {
 
   if (psramFound()) {
     config.frame_size = FRAMESIZE_QVGA;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = JPEG_QUALITY_PSRAM;
     config.fb_count = 2;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
     config.frame_size = FRAMESIZE_QVGA;
-    config.jpeg_quality = 14;
+    config.jpeg_quality = JPEG_QUALITY_DRAM;
     config.fb_count = 1;
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
@@ -110,7 +130,7 @@ void startCamera() {
   sensor_t* sensor = esp_camera_sensor_get();
   if (sensor) {
     sensor->set_framesize(sensor, FRAMESIZE_QVGA);
-    sensor->set_quality(sensor, psramFound() ? 12 : 14);
+    sensor->set_quality(sensor, psramFound() ? JPEG_QUALITY_PSRAM : JPEG_QUALITY_DRAM);
   }
 }
 
@@ -127,6 +147,14 @@ void handlePreviewClient(WiFiClient client) {
     client.println("Content-Type: text/plain");
     client.println();
     client.println("OK");
+    client.print("clients=");
+    client.println(WiFi.softAPgetStationNum());
+    client.stop();
+    return;
+  }
+
+  if (requestLine.startsWith("GET /snapshot")) {
+    sendSnapshot(client);
     client.stop();
     return;
   }
@@ -145,7 +173,9 @@ void handlePreviewClient(WiFiClient client) {
   client.println("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
   client.println("<title>RocketCam</title></head><body style='margin:0;background:#020617;color:#67e8f9;font-family:monospace;text-align:center'>");
   client.println("<h3>RocketCam MJPEG Stream</h3>");
-  client.println("<img src='http://192.168.4.1:81/stream' style='max-width:100%;height:auto'>");
+  client.println("<p>This page does not auto-open video, to avoid occupying the single stream.</p>");
+  client.println("<p><a style='color:#67e8f9' href='http://192.168.4.1:81/stream'>Open MJPEG stream</a></p>");
+  client.println("<p><a style='color:#fde68a' href='http://192.168.4.1/snapshot'>Open single JPEG snapshot</a></p>");
   client.println("<p>HUD URL: http://192.168.4.1:81/stream</p>");
   client.println("</body></html>");
   client.stop();
@@ -157,6 +187,79 @@ void handlePreviewServerTask(void* parameter) {
     WiFiClient previewClient = previewServer.available();
     if (previewClient) {
       handlePreviewClient(previewClient);
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
+void sendSnapshot(WiFiClient& client) {
+  camera_fb_t* frame = esp_camera_fb_get();
+  if (!frame) {
+    Serial.println("Snapshot capture failed");
+    client.println("HTTP/1.1 503 Service Unavailable");
+    client.println("Access-Control-Allow-Origin: *");
+    client.println("Cache-Control: no-cache");
+    client.println("Connection: close");
+    client.println("Content-Type: text/plain");
+    client.println();
+    client.println("Camera capture failed");
+    return;
+  }
+
+  client.println("HTTP/1.1 200 OK");
+  client.println("Access-Control-Allow-Origin: *");
+  client.println("Cache-Control: no-cache, no-store, must-revalidate");
+  client.println("Pragma: no-cache");
+  client.println("Connection: close");
+  client.println("Content-Type: image/jpeg");
+  client.print("Content-Length: ");
+  client.println(frame->len);
+  client.println();
+  client.write(frame->buf, frame->len);
+  esp_camera_fb_return(frame);
+}
+
+void handleStreamServerTask(void* parameter) {
+  (void)parameter;
+  for (;;) {
+    WiFiClient streamClient = streamServer.available();
+    if (streamClient) {
+      if (activeStreamTask != nullptr) {
+        Serial.println("New MJPEG client requested; closing previous stream client");
+        activeStreamClient.stop();
+        vTaskDelay(pdMS_TO_TICKS(120));
+      }
+
+      StreamClientContext* ctx = new StreamClientContext;
+      if (!ctx) {
+        Serial.println("Failed to allocate stream client context");
+        streamClient.stop();
+      } else {
+        ctx->client = streamClient;
+        activeStreamClient = streamClient;
+        BaseType_t ok = xTaskCreatePinnedToCore(
+          [](void* taskParameter) {
+            StreamClientContext* taskCtx = static_cast<StreamClientContext*>(taskParameter);
+            handleStreamClient(taskCtx->client);
+            delete taskCtx;
+            activeStreamTask = nullptr;
+            vTaskDelete(nullptr);
+          },
+          "stream-client",
+          8192,
+          ctx,
+          2,
+          &activeStreamTask,
+          1
+        );
+        if (ok != pdPASS) {
+          Serial.println("Failed to start stream client task");
+          activeStreamClient.stop();
+          streamClient.stop();
+          delete ctx;
+          activeStreamTask = nullptr;
+        }
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(10));
   }
@@ -182,24 +285,34 @@ void handleStreamClient(WiFiClient client) {
   client.println("Content-Type: multipart/x-mixed-replace; boundary=frame");
   client.println();
 
+  int captureFailures = 0;
   while (client.connected()) {
     camera_fb_t* frame = esp_camera_fb_get();
     if (!frame) {
       Serial.println("Camera capture failed");
+      captureFailures++;
+      if (captureFailures >= MAX_CAPTURE_FAILURES) {
+        Serial.println("Too many camera capture failures, restarting...");
+        client.stop();
+        delay(500);
+        ESP.restart();
+      }
       delay(100);
       continue;
     }
+    captureFailures = 0;
 
     client.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", frame->len);
     size_t written = client.write(frame->buf, frame->len);
     client.print("\r\n");
     esp_camera_fb_return(frame);
 
-    if (written == 0) {
+    if (written != frame->len) {
+      Serial.println("MJPEG client write failed");
       break;
     }
 
-    delay(40);
+    delay(STREAM_FRAME_DELAY_MS);
   }
 
   client.stop();
@@ -212,8 +325,8 @@ void startAccessPoint() {
   WiFi.softAPConfig(localIp, gateway, subnet);
 
   bool apStarted = strlen(AP_PASSWORD) >= 8
-    ? WiFi.softAP(AP_SSID, AP_PASSWORD)
-    : WiFi.softAP(AP_SSID);
+    ? WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, false, AP_MAX_CLIENTS)
+    : WiFi.softAP(AP_SSID, nullptr, AP_CHANNEL, false, AP_MAX_CLIENTS);
 
   if (!apStarted) {
     Serial.println("Wi-Fi AP start failed, restarting...");
@@ -223,6 +336,9 @@ void startAccessPoint() {
 
   previewServer.begin();
   streamServer.begin();
+  Serial.println("HTTP health server listening on port 80");
+  Serial.println("MJPEG stream server listening on port 81");
+
   xTaskCreatePinnedToCore(
     handlePreviewServerTask,
     "preview-server",
@@ -232,11 +348,26 @@ void startAccessPoint() {
     nullptr,
     0
   );
+  xTaskCreatePinnedToCore(
+    handleStreamServerTask,
+    "stream-server",
+    8192,
+    nullptr,
+    2,
+    nullptr,
+    1
+  );
 
   Serial.println();
   Serial.println("RocketCam ready");
   Serial.print("SSID: ");
   Serial.println(AP_SSID);
+  Serial.print("Password: ");
+  Serial.println(strlen(AP_PASSWORD) >= 8 ? AP_PASSWORD : "(open)");
+  Serial.print("Channel: ");
+  Serial.println(AP_CHANNEL);
+  Serial.print("Max clients: ");
+  Serial.println(AP_MAX_CLIENTS);
   Serial.print("Preview: http://");
   Serial.println(WiFi.softAPIP());
   Serial.print("MJPEG: http://");
@@ -260,8 +391,5 @@ void setup() {
 }
 
 void loop() {
-  WiFiClient streamClient = streamServer.available();
-  if (streamClient) {
-    handleStreamClient(streamClient);
-  }
+  vTaskDelay(pdMS_TO_TICKS(1000));
 }

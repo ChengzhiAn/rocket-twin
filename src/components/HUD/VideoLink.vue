@@ -2,12 +2,21 @@
   <section class="video-link" :class="{ 'is-fullscreen': isFullscreen }">
     <div class="video-kicker">VIDEO LINK / ESP-32</div>
 
-    <header class="video-status-bar" :class="isLinkActive ? 'is-active' : 'is-lost'">
+    <header class="video-status-bar" :class="statusClass">
       <div class="status-left">
         <span class="status-dot"></span>
-        <span>{{ isLinkActive ? 'LINK ACTIVE' : 'SIGNAL LOST' }}</span>
+        <span>{{ statusText }}</span>
       </div>
       <div class="video-bar-actions">
+        <button
+          v-if="videoEnabled"
+          type="button"
+          class="stop-btn"
+          title="Stop video requests"
+          @click="disableVideo"
+        >
+          STOP
+        </button>
         <button
           type="button"
           class="flip-btn"
@@ -26,17 +35,36 @@
 
     <div class="video-frame">
       <img
-        v-show="isLinkActive"
+        v-if="videoEnabled"
+        v-show="shouldShowStream && !streamFailed"
         :key="streamKey"
         class="video-stream"
         :class="{ 'is-flipped': isFlip180 }"
-        :src="streamUrl"
+        :src="imageUrl"
         alt="ESP32-CAM MJPEG stream"
         @load="handleStreamLoad"
         @error="handleStreamError"
       />
 
-      <div v-if="!isLinkActive" class="signal-lost-panel">
+      <div v-if="!videoEnabled" class="signal-lost-panel signal-standby-panel">
+        <div class="lost-title">VIDEO STANDBY</div>
+        <div class="lost-subtitle">Video is off to avoid occupying RocketCam</div>
+        <div class="lost-source">CONNECT TO ROCKETCAM WIFI / 192.168.4.1</div>
+        <button type="button" class="reconnect-btn" @click="enableVideo">
+          ENABLE VIDEO
+        </button>
+      </div>
+
+      <div v-else-if="streamFailed" class="signal-lost-panel">
+        <div class="lost-title">STREAM TIMEOUT</div>
+        <div class="lost-subtitle">Video stream did not return frames</div>
+        <div class="lost-source">MJPEG failed; retry or use snapshot fallback</div>
+        <button type="button" class="reconnect-btn" @click="reconnect">
+          RECONNECT VIDEO
+        </button>
+      </div>
+
+      <div v-else-if="!healthOk" class="signal-lost-panel">
         <div class="lost-title">SIGNAL LOST</div>
         <div class="lost-subtitle">ESP32-CAM signal lost</div>
         <div class="lost-source">VIDEO SOURCE: ESP32-CAM / MJPEG STREAM</div>
@@ -55,8 +83,11 @@ import { useRocketStore } from '../../store/rocket'
 const rocketStore = useRocketStore()
 
 const streamKey = ref(Date.now())
+const videoEnabled = ref(false)
 const healthOk = ref(false)
 const imageLoaded = ref(false)
+const streamFailed = ref(false)
+const streamMode = ref<'mjpeg' | 'snapshot'>('mjpeg')
 const isFullscreen = ref(false)
 /** Default 180° (common inverted mount); toggling FLIP persists to localStorage */
 const isFlip180 = ref(true)
@@ -64,10 +95,14 @@ const isFlip180 = ref(true)
 const VIDEO_FLIP_STORAGE_KEY = 'rocketCamVideoFlip180'
 
 let healthTimer: number | undefined
+let snapshotTimer: number | undefined
+let mjpegFallbackTimer: number | undefined
 let healthPollSeq = 0
 let lastStreamRestartAt = 0
 
 const streamRetryMs = 4000
+const snapshotIntervalMs = 280
+const mjpegFallbackMs = 4500
 
 const normalizedHost = computed(() => {
   return rocketStore.esp32CamHost
@@ -79,20 +114,40 @@ const normalizedHost = computed(() => {
 })
 
 const streamUrl = computed(() => `http://${normalizedHost.value}:81/stream?cb=${streamKey.value}`)
+const snapshotUrl = computed(() => `http://${normalizedHost.value}/snapshot?cb=${streamKey.value}`)
+const imageUrl = computed(() => (streamMode.value === 'snapshot' ? snapshotUrl.value : streamUrl.value))
 const healthUrl = computed(() => `http://${normalizedHost.value}/health`)
 
-const isLinkActive = computed(() => healthOk.value && imageLoaded.value)
+const shouldShowStream = computed(() => videoEnabled.value && healthOk.value)
+const isLinkActive = computed(() => shouldShowStream.value && imageLoaded.value)
+const statusText = computed(() => {
+  if (!videoEnabled.value) return 'VIDEO STANDBY'
+  if (isLinkActive.value) return 'LINK ACTIVE'
+  if (streamFailed.value) return 'STREAM TIMEOUT'
+  if (healthOk.value && streamMode.value === 'snapshot') return 'SNAPSHOT OPEN'
+  return healthOk.value ? 'STREAM OPEN' : 'SIGNAL LOST'
+})
+const statusClass = computed(() => {
+  if (!videoEnabled.value) return 'is-standby'
+  if (streamFailed.value) return 'is-lost'
+  if (healthOk.value) return 'is-active'
+  return 'is-lost'
+})
 
 function restartStream(force = false) {
+  if (!videoEnabled.value) return
   const now = Date.now()
   if (!force && now - lastStreamRestartAt < streamRetryMs) return
 
   imageLoaded.value = false
+  streamFailed.value = false
   streamKey.value = now
   lastStreamRestartAt = now
+  if (healthOk.value && streamMode.value === 'mjpeg') armMjpegFallbackTimer()
 }
 
 function updateHealthStatus(ok: boolean) {
+  if (!videoEnabled.value) return
   const wasHealthy = healthOk.value
   healthOk.value = ok
 
@@ -106,24 +161,111 @@ function updateHealthStatus(ok: boolean) {
     return
   }
 
-  if (!imageLoaded.value) {
-    restartStream()
+  if (!imageLoaded.value) restartStream()
+}
+
+function startHealthPolling() {
+  if (healthTimer) window.clearInterval(healthTimer)
+  void pollHealth()
+  healthTimer = window.setInterval(pollHealth, 3000)
+}
+
+function stopHealthPolling() {
+  if (healthTimer) {
+    window.clearInterval(healthTimer)
+    healthTimer = undefined
   }
 }
 
-function reconnect() {
+function startSnapshotPolling() {
+  if (snapshotTimer) window.clearInterval(snapshotTimer)
+  snapshotTimer = window.setInterval(() => {
+    if (videoEnabled.value && healthOk.value && streamMode.value === 'snapshot') {
+      streamKey.value = Date.now()
+    }
+  }, snapshotIntervalMs)
+}
+
+function stopSnapshotPolling() {
+  if (snapshotTimer) {
+    window.clearInterval(snapshotTimer)
+    snapshotTimer = undefined
+  }
+}
+
+function clearMjpegFallbackTimer() {
+  if (mjpegFallbackTimer) {
+    window.clearTimeout(mjpegFallbackTimer)
+    mjpegFallbackTimer = undefined
+  }
+}
+
+function armMjpegFallbackTimer() {
+  clearMjpegFallbackTimer()
+  mjpegFallbackTimer = window.setTimeout(() => {
+    if (videoEnabled.value && healthOk.value && streamMode.value === 'mjpeg' && !imageLoaded.value) {
+      switchToSnapshotMode()
+    }
+  }, mjpegFallbackMs)
+}
+
+function switchToSnapshotMode() {
+  clearMjpegFallbackTimer()
+  streamMode.value = 'snapshot'
+  imageLoaded.value = false
+  streamFailed.value = false
+  streamKey.value = Date.now()
+  startSnapshotPolling()
+}
+
+function enableVideo() {
+  videoEnabled.value = true
+  streamMode.value = 'mjpeg'
   healthOk.value = false
+  imageLoaded.value = false
+  streamFailed.value = false
+  restartStream(true)
+  startHealthPolling()
+}
+
+function disableVideo() {
+  stopHealthPolling()
+  stopSnapshotPolling()
+  clearMjpegFallbackTimer()
+  videoEnabled.value = false
+  healthOk.value = false
+  imageLoaded.value = false
+  streamFailed.value = false
+  streamKey.value = Date.now()
+}
+
+function reconnect() {
+  if (!videoEnabled.value) {
+    enableVideo()
+    return
+  }
+  streamMode.value = 'mjpeg'
+  stopSnapshotPolling()
+  healthOk.value = false
+  imageLoaded.value = false
+  streamFailed.value = false
   restartStream(true)
   void pollHealth()
 }
 
 function handleStreamLoad() {
   imageLoaded.value = true
+  streamFailed.value = false
+  if (streamMode.value === 'mjpeg') clearMjpegFallbackTimer()
 }
 
 function handleStreamError() {
   imageLoaded.value = false
-  if (healthOk.value) restartStream()
+  if (streamMode.value === 'mjpeg') {
+    switchToSnapshotMode()
+    return
+  }
+  streamFailed.value = true
 }
 
 function toggleFullscreen() {
@@ -143,6 +285,7 @@ watch(isFlip180, (on) => {
 })
 
 async function pollHealth() {
+  if (!videoEnabled.value) return
   const pollSeq = ++healthPollSeq
   const ctrl = new AbortController()
   const timeout = window.setTimeout(() => ctrl.abort(), 2200)
@@ -160,6 +303,11 @@ async function pollHealth() {
   }
 }
 
+watch(normalizedHost, () => {
+  if (!videoEnabled.value) return
+  reconnect()
+})
+
 onMounted(() => {
   try {
     const v = localStorage.getItem(VIDEO_FLIP_STORAGE_KEY)
@@ -170,12 +318,10 @@ onMounted(() => {
     isFlip180.value = true
   }
   rocketStore.setVideoSource?.('ESP32_CAM')
-  pollHealth()
-  healthTimer = window.setInterval(pollHealth, 3000)
 })
 
 onBeforeUnmount(() => {
-  if (healthTimer) window.clearInterval(healthTimer)
+  disableVideo()
 })
 </script>
 
@@ -262,12 +408,18 @@ onBeforeUnmount(() => {
   background: var(--panel-red);
 }
 
+.is-standby .status-dot {
+  color: #facc15;
+  background: #facc15;
+}
+
 .video-bar-actions {
   display: flex;
   align-self: stretch;
   flex-shrink: 0;
 }
 
+.stop-btn,
 .flip-btn,
 .fullscreen-btn {
   align-self: stretch;
@@ -279,6 +431,11 @@ onBeforeUnmount(() => {
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.12em;
+}
+
+.stop-btn {
+  background: rgba(127, 29, 29, 0.4);
+  color: #fecdd3;
 }
 
 .flip-btn {
@@ -328,6 +485,17 @@ onBeforeUnmount(() => {
   background:
     radial-gradient(circle at center, rgba(127, 29, 29, 0.18), transparent 58%),
     rgba(2, 6, 23, 0.82);
+}
+
+.signal-standby-panel {
+  background:
+    radial-gradient(circle at center, rgba(202, 138, 4, 0.14), transparent 58%),
+    rgba(2, 6, 23, 0.82);
+}
+
+.signal-standby-panel .lost-title {
+  color: #fde68a;
+  text-shadow: 0 0 10px rgba(250, 204, 21, 0.62);
 }
 
 .lost-title {

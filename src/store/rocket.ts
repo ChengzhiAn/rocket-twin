@@ -1332,6 +1332,9 @@ export const useRocketStore = defineStore('rocket', () => {
         return
       }
 
+      // 现场存在旧 LoRa 模块广播 CSV；当前版本仅接受 JSON，直接忽略非 JSON 行。
+      return
+
       const parts = line.split(',').map(v => parseFloat(v.trim()));
       const core = parts.slice(0, 19)
 
